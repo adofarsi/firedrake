@@ -59,68 +59,80 @@ jobs:
           print('PETSc:', PETSc.Sys.getVersion())
           Path('results/adjoint-solve-source.txt').write_text(source)
           PY
-      - name: Gradient regression at one MPI rank
-        if: steps.install.outcome == 'success'
-        env:
-          FIREDRAKE_CACHE_DIR: /tmp/rhs-cache-n1
-        run: |
-          cd firedrake-repo
-          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs --junitxml=../results/gradient-n1.xml 2>&1 | tee ../results/gradient-n1.log
-      - name: Gradient regression at two MPI ranks
+      - name: baseline at 1 MPI ranks
         if: always() && steps.install.outcome == 'success'
         env:
-          FIREDRAKE_CACHE_DIR: /tmp/rhs-cache-n2
+          FIREDRAKE_CACHE_DIR: /tmp/rhs-baseline-n1
         run: |
           cd firedrake-repo
-          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs --junitxml=../results/gradient-n2.xml 2>&1 | tee ../results/gradient-n2.log
-      - name: Search supported RHS shapes at one MPI rank
+          set +e
+          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs --junitxml=../results/baseline-n1.xml 2>&1 | tee ../results/baseline-n1.log
+          rhs_test_exit=${PIPESTATUS[0]}
+          echo "$rhs_test_exit" > ../results/baseline-n1.exit
+          exit "$rhs_test_exit"
+      - name: baseline at 2 MPI ranks
         if: always() && steps.install.outcome == 'success'
         env:
-          FIREDRAKE_CACHE_DIR: /tmp/rhs-search-n1
+          FIREDRAKE_CACHE_DIR: /tmp/rhs-baseline-n2
         run: |
           cd firedrake-repo
-          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py --junitxml=../results/search-n1.xml 2>&1 | tee ../results/search-n1.log
-      - name: Search supported RHS shapes at two MPI ranks
+          set +e
+          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs --junitxml=../results/baseline-n2.xml 2>&1 | tee ../results/baseline-n2.log
+          rhs_test_exit=${PIPESTATUS[0]}
+          echo "$rhs_test_exit" > ../results/baseline-n2.exit
+          exit "$rhs_test_exit"
+      - name: controlled-gradient at 1 MPI ranks
         if: always() && steps.install.outcome == 'success'
         env:
-          FIREDRAKE_CACHE_DIR: /tmp/rhs-search-n2
-        run: |
-          cd firedrake-repo
-          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py --junitxml=../results/search-n2.xml 2>&1 | tee ../results/search-n2.log
-      - name: renumber diagnostic control at 1 MPI ranks
-        if: always() && steps.install.outcome == 'success'
-        env:
-          FIREDRAKE_CACHE_DIR: /tmp/rhs-renumber-n1
-          RHS_RENUMBER: "1"
-        run: |
-          cd firedrake-repo
-          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs --junitxml=../results/renumber-n1.xml 2>&1 | tee ../results/renumber-n1.log
-      - name: renumber diagnostic control at 2 MPI ranks
-        if: always() && steps.install.outcome == 'success'
-        env:
-          FIREDRAKE_CACHE_DIR: /tmp/rhs-renumber-n2
-          RHS_RENUMBER: "1"
-        run: |
-          cd firedrake-repo
-          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs --junitxml=../results/renumber-n2.xml 2>&1 | tee ../results/renumber-n2.log
-      - name: controls diagnostic control at 1 MPI ranks
-        if: always() && steps.install.outcome == 'success'
-        env:
-          FIREDRAKE_CACHE_DIR: /tmp/rhs-controls-n1
+          FIREDRAKE_CACHE_DIR: /tmp/rhs-controlled-gradient-n1
           RHS_RENUMBER: "1"
           RHS_TRANSPOSE: "1"
         run: |
           cd firedrake-repo
-          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs tests/firedrake/adjoint/test_rhs_shapes_5551.py --junitxml=../results/controls-n1.xml 2>&1 | tee ../results/controls-n1.log
-      - name: controls diagnostic control at 2 MPI ranks
+          set +e
+          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs --junitxml=../results/controlled-gradient-n1.xml 2>&1 | tee ../results/controlled-gradient-n1.log
+          rhs_test_exit=${PIPESTATUS[0]}
+          echo "$rhs_test_exit" > ../results/controlled-gradient-n1.exit
+          exit "$rhs_test_exit"
+      - name: controlled-gradient at 2 MPI ranks
         if: always() && steps.install.outcome == 'success'
         env:
-          FIREDRAKE_CACHE_DIR: /tmp/rhs-controls-n2
+          FIREDRAKE_CACHE_DIR: /tmp/rhs-controlled-gradient-n2
           RHS_RENUMBER: "1"
           RHS_TRANSPOSE: "1"
         run: |
           cd firedrake-repo
-          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs tests/firedrake/adjoint/test_rhs_shapes_5551.py --junitxml=../results/controls-n2.xml 2>&1 | tee ../results/controls-n2.log
+          set +e
+          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs --junitxml=../results/controlled-gradient-n2.xml 2>&1 | tee ../results/controlled-gradient-n2.log
+          rhs_test_exit=${PIPESTATUS[0]}
+          echo "$rhs_test_exit" > ../results/controlled-gradient-n2.exit
+          exit "$rhs_test_exit"
+      - name: controlled-supported-search at 1 MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/rhs-controlled-supported-search-n1
+          RHS_RENUMBER: "1"
+          RHS_TRANSPOSE: "1"
+        run: |
+          cd firedrake-repo
+          set +e
+          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py -k 'not preassembled' --junitxml=../results/controlled-supported-search-n1.xml 2>&1 | tee ../results/controlled-supported-search-n1.log
+          rhs_test_exit=${PIPESTATUS[0]}
+          echo "$rhs_test_exit" > ../results/controlled-supported-search-n1.exit
+          exit "$rhs_test_exit"
+      - name: controlled-supported-search at 2 MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/rhs-controlled-supported-search-n2
+          RHS_RENUMBER: "1"
+          RHS_TRANSPOSE: "1"
+        run: |
+          cd firedrake-repo
+          set +e
+          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py -k 'not preassembled' --junitxml=../results/controlled-supported-search-n2.xml 2>&1 | tee ../results/controlled-supported-search-n2.log
+          rhs_test_exit=${PIPESTATUS[0]}
+          echo "$rhs_test_exit" > ../results/controlled-supported-search-n2.exit
+          exit "$rhs_test_exit"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
