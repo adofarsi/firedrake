@@ -65,14 +65,62 @@ jobs:
           FIREDRAKE_CACHE_DIR: /tmp/rhs-cache-n1
         run: |
           cd firedrake-repo
-          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs --junitxml=../results/gradient-n1.xml 2>&1 | tee ../results/gradient-n1.log
+          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs --junitxml=../results/gradient-n1.xml 2>&1 | tee ../results/gradient-n1.log
       - name: Gradient regression at two MPI ranks
         if: always() && steps.install.outcome == 'success'
         env:
           FIREDRAKE_CACHE_DIR: /tmp/rhs-cache-n2
         run: |
           cd firedrake-repo
-          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs --junitxml=../results/gradient-n2.xml 2>&1 | tee ../results/gradient-n2.log
+          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs --junitxml=../results/gradient-n2.xml 2>&1 | tee ../results/gradient-n2.log
+      - name: Search supported RHS shapes at one MPI rank
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/rhs-search-n1
+        run: |
+          cd firedrake-repo
+          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py --junitxml=../results/search-n1.xml 2>&1 | tee ../results/search-n1.log
+      - name: Search supported RHS shapes at two MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/rhs-search-n2
+        run: |
+          cd firedrake-repo
+          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py --junitxml=../results/search-n2.xml 2>&1 | tee ../results/search-n2.log
+      - name: renumber diagnostic control at 1 MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/rhs-renumber-n1
+          RHS_RENUMBER: "1"
+        run: |
+          cd firedrake-repo
+          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs --junitxml=../results/renumber-n1.xml 2>&1 | tee ../results/renumber-n1.log
+      - name: renumber diagnostic control at 2 MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/rhs-renumber-n2
+          RHS_RENUMBER: "1"
+        run: |
+          cd firedrake-repo
+          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs --junitxml=../results/renumber-n2.xml 2>&1 | tee ../results/renumber-n2.log
+      - name: controls diagnostic control at 1 MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/rhs-controls-n1
+          RHS_RENUMBER: "1"
+          RHS_TRANSPOSE: "1"
+        run: |
+          cd firedrake-repo
+          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs tests/firedrake/adjoint/test_rhs_shapes_5551.py --junitxml=../results/controls-n1.xml 2>&1 | tee ../results/controls-n1.log
+      - name: controls diagnostic control at 2 MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/rhs-controls-n2
+          RHS_RENUMBER: "1"
+          RHS_TRANSPOSE: "1"
+        run: |
+          cd firedrake-repo
+          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -p rhs_5551_controls -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs tests/firedrake/adjoint/test_rhs_shapes_5551.py --junitxml=../results/controls-n2.xml 2>&1 | tee ../results/controls-n2.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
