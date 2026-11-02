@@ -94,7 +94,7 @@ def test_rhs_shape_gradients(case: str, constant_jacobian: bool) -> None:
     ):
         gradient = functional.derivative(adj_input=seed)
         with stop_annotating():
-            expected = assemble(inner(seed*density, v)*dx)
+            expected = assemble(inner(Constant(seed)*density, v)*dx)
             error = assemble(gradient - expected)
         with error.dat.vec_ro as vec:
             assert vec.norm() < 1e-10

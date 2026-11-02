@@ -22,6 +22,18 @@ def diagnostic_assembly_controls(monkeypatch):
 
     monkeypatch.setattr(assembly.OneFormAssembler, "__init__", init)
 
+    if os.getenv("RHS_RENUMBER") == "1":
+        original_get_assembler = assembly.get_assembler
+
+        def get_assembler(form, *args, **kwargs):
+            arguments = form.arguments() if isinstance(form, ufl.Form) else ()
+            if len(arguments) == 1 and arguments[0].number() != 0:
+                argument, = arguments
+                form = ufl.replace(form, {argument: argument.reconstruct(number=0)})
+            return original_get_assembler(form, *args, **kwargs)
+
+        monkeypatch.setattr(assembly, "get_assembler", get_assembler)
+
     if os.getenv("RHS_TRANSPOSE") == "1":
         original_visitor = assembly.BaseFormAssembler.base_form_assembly_visitor
 
