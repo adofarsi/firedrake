@@ -1,0 +1,136 @@
+name: FEML readiness on updated UFL
+
+on:
+  push:
+    branches: [codex/feml-ufl-readiness]
+
+permissions:
+  contents: read
+
+jobs:
+  gradient:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    container:
+      image: firedrakeproject/firedrake-vanilla-default@sha256:6b1a7eaebe1013d2eb0abbb71cb872cbf1c3f3c5c480b272a48ac130be470b1e
+      options: --cpus 2 --memory 6g
+    env:
+      OMP_NUM_THREADS: 1
+      OPENBLAS_NUM_THREADS: 1
+      OMPI_ALLOW_RUN_AS_ROOT: 1
+      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: 1
+      PYOP3_SPMD_STRICT: 1
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: firedrake-repo
+      - uses: actions/checkout@v7
+        with:
+          repository: firedrakeproject/ufl
+          ref: ba5a8692833a70aa02133c662c2012955253c39d
+          path: ufl-src
+      - name: Install the pinned sources in an isolated virtual environment
+        id: install
+        run: |
+          python3 -m venv --system-site-packages /tmp/rhs-venv
+          /tmp/rhs-venv/bin/python -m pip install --no-deps --no-build-isolation -e ./ufl-src
+          /tmp/rhs-venv/bin/python -m pip install --no-deps --no-build-isolation --config-settings editable_mode=compat -e ./firedrake-repo
+          /tmp/rhs-venv/bin/python -m pip install 'mpi-pytest>=2026.0' pytest
+          /tmp/rhs-venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          mkdir -p results
+          git -C firedrake-repo rev-parse HEAD > results/firedrake-sha.txt
+          git -C ufl-src rev-parse HEAD > results/ufl-sha.txt
+          /tmp/rhs-venv/bin/python -m pip freeze > results/pip-freeze.txt
+          /tmp/rhs-venv/bin/python - <<'PY'
+          import inspect
+          from pathlib import Path
+          import firedrake, ufl, torch
+          from firedrake.ml.pytorch import ml_operator
+          from firedrake.adjoint_utils.blocks.solving import NonlinearVariationalSolveBlock
+          from petsc4py import PETSc
+          source = inspect.getsource(NonlinearVariationalSolveBlock._adjoint_solve)
+          assert '._components[1].assign(dJdu)' in source
+          assert '"adjoint_rhs"' not in source
+          assert str(Path(firedrake.__file__).resolve()).startswith(str(Path('firedrake-repo').resolve()))
+          assert str(Path(ufl.__file__).resolve()).startswith(str(Path('ufl-src').resolve()))
+          print('Firedrake:', firedrake.__file__)
+          print('UFL:', ufl.__file__)
+          print('PETSc:', PETSc.Sys.getVersion())
+          print('PyTorch:', torch.__version__)
+          print('ML factory:', inspect.signature(ml_operator))
+          Path('results/adjoint-solve-source.txt').write_text(source)
+          PY
+      - name: cached at 1 MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/feml-cached-n1
+        run: |
+          cd firedrake-repo
+          set +e
+          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs --junitxml=../results/cached-n1.xml 2>&1 | tee ../results/cached-n1.log
+          feml_test_exit=${PIPESTATUS[0]}
+          echo "$feml_test_exit" > ../results/cached-n1.exit
+          exit "$feml_test_exit"
+      - name: cached at 2 MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/feml-cached-n2
+        run: |
+          cd firedrake-repo
+          set +e
+          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_solving.py::test_cached_adjoint_rhs --junitxml=../results/cached-n2.xml 2>&1 | tee ../results/cached-n2.log
+          feml_test_exit=${PIPESTATUS[0]}
+          echo "$feml_test_exit" > ../results/cached-n2.exit
+          exit "$feml_test_exit"
+      - name: search at 1 MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/feml-search-n1
+        run: |
+          cd firedrake-repo
+          set +e
+          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py -k 'not preassembled' --junitxml=../results/search-n1.xml 2>&1 | tee ../results/search-n1.log
+          feml_test_exit=${PIPESTATUS[0]}
+          echo "$feml_test_exit" > ../results/search-n1.exit
+          exit "$feml_test_exit"
+      - name: search at 2 MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/feml-search-n2
+        run: |
+          cd firedrake-repo
+          set +e
+          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -v -s -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py -k 'not preassembled' --junitxml=../results/search-n2.xml 2>&1 | tee ../results/search-n2.log
+          feml_test_exit=${PIPESTATUS[0]}
+          echo "$feml_test_exit" > ../results/search-n2.exit
+          exit "$feml_test_exit"
+      - name: composition at 1 MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/feml-composition-n1
+        run: |
+          cd firedrake-repo
+          set +e
+          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -v -s -m 'parallel[match]' tests/firedrake/regression/test_feml_readiness.py --junitxml=../results/composition-n1.xml 2>&1 | tee ../results/composition-n1.log
+          feml_test_exit=${PIPESTATUS[0]}
+          echo "$feml_test_exit" > ../results/composition-n1.exit
+          exit "$feml_test_exit"
+      - name: composition at 2 MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/feml-composition-n2
+        run: |
+          cd firedrake-repo
+          set +e
+          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -v -s -m 'parallel[match]' tests/firedrake/regression/test_feml_readiness.py --junitxml=../results/composition-n2.xml 2>&1 | tee ../results/composition-n2.log
+          feml_test_exit=${PIPESTATUS[0]}
+          echo "$feml_test_exit" > ../results/composition-n2.exit
+          exit "$feml_test_exit"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: feml-readiness-results
+          path: results
