@@ -60,9 +60,10 @@ def check_buffer_reuse() -> dict:
     source = PETSc.Mat().createAIJ(size=(6, 6), nnz=3, comm=MPI.COMM_WORLD)
     first, last = source.getOwnershipRange()
     rows = np.arange(first, last, dtype=PETSc.IntType)
-    source.setPreallocationCOO(rows, rows)
+    source.setPreallocationCOO(rows, rows.copy())
     source.setValuesCOO(np.full(len(rows), 2, dtype=PETSc.ScalarType))
     source.assemble()
+    assert abs(source.getDiagonal().norm() - 2 * np.sqrt(6)) < 1e-12
     output = source.hermitianTranspose(out=PETSc.Mat())
     output_handle = output.handle
     cache = TransposeBuffer()
