@@ -17,7 +17,7 @@ def autouse_set_test_tape(set_test_tape):
 @pytest.mark.skiptorch
 @pytest.mark.parallel(nprocs=[1, 2])
 @pytest.mark.usefixtures("garbage_cleanup")
-@pytest.mark.parametrize("placement", ["rhs", "state"])
+@pytest.mark.parametrize("placement", ["plain_rhs", "rhs", "state"])
 def test_ml_solve_gradient(placement: str) -> None:
     """Compare the solution, repeated adjoints and replay with an exact solution."""
     class Scale(torch.nn.Module):
@@ -35,8 +35,9 @@ def test_ml_solve_gradient(placement: str) -> None:
     u, v = Function(V), TestFunction(V)
     model = Scale()
     N = ml_operator(model, function_space=V)
-    if placement == "rhs":
-        residual = inner(u - N(interpolate(source, V)), v) * dx
+    if placement in ("plain_rhs", "rhs"):
+        operand = source if placement == "plain_rhs" else interpolate(source, V)
+        residual = inner(u - N(operand), v) * dx
         solution_factor, jacobian_factor = 2.0, 1.0
     else:
         residual = inner(u + N(interpolate(u, V)) - source, v) * dx

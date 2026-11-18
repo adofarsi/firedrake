@@ -68,27 +68,71 @@ jobs:
           Path('results/adjoint-solve-source.txt').write_text(source)
           assert 'model_parameters' not in inspect.signature(ml_operator).parameters
           PY
-      - name: ml-solve at 1 MPI ranks
+      - name: ml-plain_rhs at 1 MPI ranks
         if: always() && steps.install.outcome == 'success'
         env:
-          FIREDRAKE_CACHE_DIR: /tmp/feml-main-ml-solve-n1
+          FIREDRAKE_CACHE_DIR: /tmp/feml-main-ml-plain_rhs-n1
         run: |
           cd firedrake-repo
           set +e
-          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short -m 'parallel[match]' tests/firedrake/adjoint/test_feml_main_baseline.py::test_ml_solve_gradient --junitxml=../results/ml-solve-n1.xml 2>&1 | tee ../results/ml-solve-n1.log
+          timeout -k 20s 240s mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_feml_main_baseline.py::test_ml_solve_gradient -k "plain_rhs" --junitxml=../results/ml-plain_rhs-n1.xml 2>&1 | tee ../results/ml-plain_rhs-n1.log
           feml_test_exit=${PIPESTATUS[0]}
-          echo "$feml_test_exit" > ../results/ml-solve-n1.exit
+          echo "$feml_test_exit" > ../results/ml-plain_rhs-n1.exit
           exit "$feml_test_exit"
-      - name: ml-solve at 2 MPI ranks
+      - name: ml-plain_rhs at 2 MPI ranks
         if: always() && steps.install.outcome == 'success'
         env:
-          FIREDRAKE_CACHE_DIR: /tmp/feml-main-ml-solve-n2
+          FIREDRAKE_CACHE_DIR: /tmp/feml-main-ml-plain_rhs-n2
         run: |
           cd firedrake-repo
           set +e
-          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short -m 'parallel[match]' tests/firedrake/adjoint/test_feml_main_baseline.py::test_ml_solve_gradient --junitxml=../results/ml-solve-n2.xml 2>&1 | tee ../results/ml-solve-n2.log
+          timeout -k 20s 240s mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_feml_main_baseline.py::test_ml_solve_gradient -k "plain_rhs" --junitxml=../results/ml-plain_rhs-n2.xml 2>&1 | tee ../results/ml-plain_rhs-n2.log
           feml_test_exit=${PIPESTATUS[0]}
-          echo "$feml_test_exit" > ../results/ml-solve-n2.exit
+          echo "$feml_test_exit" > ../results/ml-plain_rhs-n2.exit
+          exit "$feml_test_exit"
+      - name: ml-rhs at 1 MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/feml-main-ml-rhs-n1
+        run: |
+          cd firedrake-repo
+          set +e
+          timeout -k 20s 240s mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_feml_main_baseline.py::test_ml_solve_gradient -k "rhs and not plain_rhs" --junitxml=../results/ml-rhs-n1.xml 2>&1 | tee ../results/ml-rhs-n1.log
+          feml_test_exit=${PIPESTATUS[0]}
+          echo "$feml_test_exit" > ../results/ml-rhs-n1.exit
+          exit "$feml_test_exit"
+      - name: ml-rhs at 2 MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/feml-main-ml-rhs-n2
+        run: |
+          cd firedrake-repo
+          set +e
+          timeout -k 20s 240s mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_feml_main_baseline.py::test_ml_solve_gradient -k "rhs and not plain_rhs" --junitxml=../results/ml-rhs-n2.xml 2>&1 | tee ../results/ml-rhs-n2.log
+          feml_test_exit=${PIPESTATUS[0]}
+          echo "$feml_test_exit" > ../results/ml-rhs-n2.exit
+          exit "$feml_test_exit"
+      - name: ml-state at 1 MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/feml-main-ml-state-n1
+        run: |
+          cd firedrake-repo
+          set +e
+          timeout -k 20s 240s mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_feml_main_baseline.py::test_ml_solve_gradient -k "state" --junitxml=../results/ml-state-n1.xml 2>&1 | tee ../results/ml-state-n1.log
+          feml_test_exit=${PIPESTATUS[0]}
+          echo "$feml_test_exit" > ../results/ml-state-n1.exit
+          exit "$feml_test_exit"
+      - name: ml-state at 2 MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/feml-main-ml-state-n2
+        run: |
+          cd firedrake-repo
+          set +e
+          timeout -k 20s 240s mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_feml_main_baseline.py::test_ml_solve_gradient -k "state" --junitxml=../results/ml-state-n2.xml 2>&1 | tee ../results/ml-state-n2.log
+          feml_test_exit=${PIPESTATUS[0]}
+          echo "$feml_test_exit" > ../results/ml-state-n2.exit
           exit "$feml_test_exit"
       - name: cached at 1 MPI ranks
         if: always() && steps.install.outcome == 'success'
@@ -97,7 +141,7 @@ jobs:
         run: |
           cd firedrake-repo
           set +e
-          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short -m 'parallel[match]' tests/firedrake/adjoint/test_feml_main_baseline.py::test_cached_adjoint_rhs --junitxml=../results/cached-n1.xml 2>&1 | tee ../results/cached-n1.log
+          timeout -k 20s 240s mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_feml_main_baseline.py::test_cached_adjoint_rhs --junitxml=../results/cached-n1.xml 2>&1 | tee ../results/cached-n1.log
           feml_test_exit=${PIPESTATUS[0]}
           echo "$feml_test_exit" > ../results/cached-n1.exit
           exit "$feml_test_exit"
@@ -108,7 +152,7 @@ jobs:
         run: |
           cd firedrake-repo
           set +e
-          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short -m 'parallel[match]' tests/firedrake/adjoint/test_feml_main_baseline.py::test_cached_adjoint_rhs --junitxml=../results/cached-n2.xml 2>&1 | tee ../results/cached-n2.log
+          timeout -k 20s 240s mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_feml_main_baseline.py::test_cached_adjoint_rhs --junitxml=../results/cached-n2.xml 2>&1 | tee ../results/cached-n2.log
           feml_test_exit=${PIPESTATUS[0]}
           echo "$feml_test_exit" > ../results/cached-n2.exit
           exit "$feml_test_exit"
@@ -119,7 +163,7 @@ jobs:
         run: |
           cd firedrake-repo
           set +e
-          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py --junitxml=../results/rhs-shapes-n1.xml 2>&1 | tee ../results/rhs-shapes-n1.log
+          timeout -k 20s 240s mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py --junitxml=../results/rhs-shapes-n1.xml 2>&1 | tee ../results/rhs-shapes-n1.log
           feml_test_exit=${PIPESTATUS[0]}
           echo "$feml_test_exit" > ../results/rhs-shapes-n1.exit
           exit "$feml_test_exit"
@@ -130,7 +174,7 @@ jobs:
         run: |
           cd firedrake-repo
           set +e
-          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py --junitxml=../results/rhs-shapes-n2.xml 2>&1 | tee ../results/rhs-shapes-n2.log
+          timeout -k 20s 240s mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py --junitxml=../results/rhs-shapes-n2.xml 2>&1 | tee ../results/rhs-shapes-n2.log
           feml_test_exit=${PIPESTATUS[0]}
           echo "$feml_test_exit" > ../results/rhs-shapes-n2.exit
           exit "$feml_test_exit"
@@ -141,7 +185,7 @@ jobs:
         run: |
           cd firedrake-repo
           set +e
-          mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short -m 'parallel[match]' tests/firedrake/regression/test_feml_readiness.py --junitxml=../results/composition-n1.xml 2>&1 | tee ../results/composition-n1.log
+          timeout -k 20s 240s mpiexec --oversubscribe -n 1 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/regression/test_feml_readiness.py --junitxml=../results/composition-n1.xml 2>&1 | tee ../results/composition-n1.log
           feml_test_exit=${PIPESTATUS[0]}
           echo "$feml_test_exit" > ../results/composition-n1.exit
           exit "$feml_test_exit"
@@ -152,7 +196,7 @@ jobs:
         run: |
           cd firedrake-repo
           set +e
-          mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short -m 'parallel[match]' tests/firedrake/regression/test_feml_readiness.py --junitxml=../results/composition-n2.xml 2>&1 | tee ../results/composition-n2.log
+          timeout -k 20s 240s mpiexec --oversubscribe -n 2 /tmp/rhs-venv/bin/python -m pytest -v -s --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/regression/test_feml_readiness.py --junitxml=../results/composition-n2.xml 2>&1 | tee ../results/composition-n2.log
           feml_test_exit=${PIPESTATUS[0]}
           echo "$feml_test_exit" > ../results/composition-n2.exit
           exit "$feml_test_exit"
