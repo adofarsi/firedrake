@@ -1,0 +1,101 @@
+name: Validate native ML parameter handles
+
+on:
+  push:
+    branches: [codex/validate-ml-parameters-20261118]
+
+permissions:
+  contents: read
+
+jobs:
+  parameters:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: real
+            image: firedrakeproject/firedrake-vanilla-default@sha256:6b1a7eaebe1013d2eb0abbb71cb872cbf1c3f3c5c480b272a48ac130be470b1e
+          - variant: complex
+            image: firedrakeproject/firedrake-vanilla-complex@sha256:6c1e0921835995095fff7de9328004071f4c9d053276666bcc5e5652be5cc1df
+    container:
+      image: ${{ matrix.image }}
+      options: --cpus 2 --memory 6g
+    env:
+      OMP_NUM_THREADS: 1
+      OPENBLAS_NUM_THREADS: 1
+      OMPI_ALLOW_RUN_AS_ROOT: 1
+      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: 1
+      PYOP3_SPMD_STRICT: 1
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: firedrake-repo
+      - uses: actions/checkout@v7
+        with:
+          repository: FEniCS/ufl
+          ref: a001fce09da7fd6f4339d339eea62a69428317cb
+          path: ufl-src
+      - name: Install pinned sources and PyTorch
+        id: install
+        run: |
+          python3 -m venv --system-site-packages /tmp/parameters-venv
+          /tmp/parameters-venv/bin/python -m pip install --no-deps --no-build-isolation -e ./ufl-src
+          /tmp/parameters-venv/bin/python -m pip install --no-deps --no-build-isolation --config-settings editable_mode=compat -e ./firedrake-repo
+          /tmp/parameters-venv/bin/python -m pip install 'mpi-pytest>=2026.0' pytest flake8 cython-lint
+          /tmp/parameters-venv/bin/python -m pip install torch==2.15.0+cpu --index-url https://download.pytorch.org/whl/cpu
+          mkdir -p results
+          git -C firedrake-repo rev-parse HEAD > results/firedrake-sha.txt
+          git -C ufl-src rev-parse HEAD > results/ufl-sha.txt
+          /tmp/parameters-venv/bin/python -m pip freeze > results/pip-freeze.txt
+          /tmp/parameters-venv/bin/python - <<'PY'
+          import json, platform
+          from pathlib import Path
+          import firedrake, ufl, torch
+          from firedrake.ml.pytorch import MLParameters
+          from firedrake.utils import complex_mode
+          from petsc4py import PETSc
+          assert str(Path(firedrake.__file__).resolve()).startswith(str(Path('firedrake-repo').resolve()))
+          assert str(Path(ufl.__file__).resolve()).startswith(str(Path('ufl-src').resolve()))
+          report = {'python': platform.python_version(), 'petsc': PETSc.Sys.getVersion(), 'complex_mode': complex_mode, 'torch': torch.__version__}
+          Path('results/environment.json').write_text(json.dumps(report, indent=2))
+          print(report)
+          PY
+      - name: Source lint
+        if: steps.install.outcome == 'success' && matrix.variant == 'real'
+        run: |
+          cd firedrake-repo
+          PATH=/tmp/parameters-venv/bin:$PATH make srclint 2>&1 | tee ../results/srclint.txt
+      - name: Parameter foundation at one MPI rank
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/parameters-n1
+        run: |
+          cd firedrake-repo
+          timeout -k 10s 180s mpiexec --oversubscribe -n 1 /tmp/parameters-venv/bin/python -m pytest -v --tb=short -m 'parallel[match]' tests/firedrake/external_operators/test_pytorch_operator.py -k ml_parameters --junitxml=../results/parameters-n1.xml 2>&1 | tee ../results/parameters-n1.log
+      - name: Parameter foundation at two MPI ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/parameters-n2
+        run: |
+          cd firedrake-repo
+          timeout -k 10s 180s mpiexec --oversubscribe -n 2 /tmp/parameters-venv/bin/python -m pytest -v --tb=short -m 'parallel[match]' tests/firedrake/external_operators/test_pytorch_operator.py -k ml_parameters --junitxml=../results/parameters-n2.xml 2>&1 | tee ../results/parameters-n2.log
+      - name: Existing ML interfaces and coefficient differentiation
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/parameters-existing
+        run: |
+          cd firedrake-repo
+          timeout -k 15s 600s /tmp/parameters-venv/bin/python -m pytest -v --tb=short -m 'not parallel' tests/firedrake/external_operators/test_pytorch_operator.py tests/firedrake/regression/test_pytorch_coupling.py tests/firedrake/regression/test_coefficient_derivatives.py tests/firedrake/regression/test_constant.py -k 'not ml_parameters' --junitxml=../results/existing.xml 2>&1 | tee ../results/existing.log
+      - name: Dependency consistency
+        if: always() && steps.install.outcome == 'success'
+        run: /tmp/parameters-venv/bin/python -m pip check 2>&1 | tee results/pip-check.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ml-parameters-${{ matrix.variant }}
+          path: results
