@@ -64,7 +64,7 @@ def check_buffer_reuse() -> dict:
     source.setValuesCOO(np.full(len(rows), 2, dtype=PETSc.ScalarType))
     source.assemble()
     output = source.hermitianTranspose(out=PETSc.Mat())
-    output_id = output.getId()
+    output_handle = output.handle
     cache = TransposeBuffer()
     stages = []
 
@@ -75,7 +75,7 @@ def check_buffer_reuse() -> dict:
         difference = output.copy()
         difference.axpy(-1, reference)
         assert difference.norm() < 1e-12
-        assert output.getId() == output_id
+        assert output.handle == output_handle
         stages.append({"label": label, "allocations": cache.allocations,
                        "work_id": result.getId(), "source_id": source.getId(),
                        "nonzero_state": nonzero_state(source)})
