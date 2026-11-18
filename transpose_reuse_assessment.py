@@ -88,11 +88,13 @@ def check_buffer_reuse() -> dict:
 
     source.setOption(PETSc.Mat.Option.NEW_NONZERO_ALLOCATION_ERR, False)
     source.setOption(PETSc.Mat.Option.NEW_NONZERO_LOCATION_ERR, False)
+    source.setOption(PETSc.Mat.Option.NEW_NONZERO_LOCATIONS, True)
     if first <= 0 < last:
         source.setValue(0, 1, 7)
     source.assemble()
+    assert abs(source.norm() - 7) < 1e-12
     check("one_rank_inserts_entry")
-    assert cache.allocations == 2
+    assert cache.allocations == 2, stages
 
     previous_source = source
     source = previous_source.copy()
@@ -145,7 +147,7 @@ def trace_firedrake_sources() -> list[dict]:
         })
         solver.solve()
         functional = ReducedFunctional(assemble(0.5 * u**2 * dx), Control(f))
-        for index, seed in enumerate((1, -2, 0, 3)):
+        for index, seed in enumerate((1.0, -2.0, 0.0, 3.0)):
             phase = f"cached_adjoint_derivative_{index}"
             gradient = functional.derivative(adj_input=seed)
             with stop_annotating():
