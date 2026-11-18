@@ -44,11 +44,13 @@ jobs:
         id: install
         run: |
           python3 -m venv --system-site-packages /tmp/parameters-venv
+          git -C ufl-src apply ../firedrake-repo/.github/validation/ufl-domain-free-parameters.patch
           /tmp/parameters-venv/bin/python -m pip install --no-deps --no-build-isolation -e ./ufl-src
           /tmp/parameters-venv/bin/python -m pip install --no-deps --no-build-isolation --config-settings editable_mode=compat -e ./firedrake-repo
           /tmp/parameters-venv/bin/python -m pip install 'mpi-pytest>=2026.0' pytest flake8 cython-lint
           /tmp/parameters-venv/bin/python -m pip install torch==2.15.0+cpu --index-url https://download.pytorch.org/whl/cpu
           mkdir -p results
+          git -C ufl-src diff > results/ufl-support.patch
           git -C firedrake-repo rev-parse HEAD > results/firedrake-sha.txt
           git -C ufl-src rev-parse HEAD > results/ufl-sha.txt
           /tmp/parameters-venv/bin/python -m pip freeze > results/pip-freeze.txt
@@ -91,6 +93,11 @@ jobs:
         run: |
           cd firedrake-repo
           timeout -k 15s 600s /tmp/parameters-venv/bin/python -m pytest -v --tb=short -m 'not parallel' tests/firedrake/external_operators/test_pytorch_operator.py tests/firedrake/regression/test_pytorch_coupling.py tests/firedrake/regression/test_coefficient_derivatives.py tests/firedrake/regression/test_constant.py -k 'not ml_parameters' --junitxml=../results/existing.xml 2>&1 | tee ../results/existing.log
+      - name: UFL regression suite
+        if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
+        run: |
+          cd ufl-src
+          timeout -k 10s 180s /tmp/parameters-venv/bin/python -m pytest -q --tb=short test --junitxml=../results/ufl.xml 2>&1 | tee ../results/ufl.log
       - name: Dependency consistency
         if: always() && steps.install.outcome == 'success'
         run: /tmp/parameters-venv/bin/python -m pip check 2>&1 | tee results/pip-check.txt
