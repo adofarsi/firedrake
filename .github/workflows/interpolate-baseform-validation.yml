@@ -120,6 +120,16 @@ jobs:
         run: |
           cd firedrake-repo
           timeout -k 10s 180s mpiexec --oversubscribe -n 3 /tmp/interpolate-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_interpolate.py::test_interpolate_composition tests/firedrake/regression/test_interpolate.py::test_interpolate_form tests/firedrake/regression/test_interpolate.py::test_interpolate_form_different_shapes tests/firedrake/regression/test_interpolate.py::test_interpolate_form_mixed --junitxml=../results/existing-n3.xml 2>&1 | tee ../results/existing-n3.log
+      - name: Verify independence from the transpose fix
+        if: always() && steps.install.outcome == 'success'
+        run: |
+          cd firedrake-repo
+          cp firedrake/assemble.py /tmp/assemble-transpose-fixed.py
+          trap 'cp /tmp/assemble-transpose-fixed.py firedrake/assemble.py' EXIT
+          git show c5ac40f23a79c81876f96c9d10fb60b6625c8601:firedrake/assemble.py > firedrake/assemble.py
+          for ranks in 1 2; do
+            FIREDRAKE_CACHE_DIR=/tmp/interpolate-n${ranks} timeout -k 10s 180s mpiexec --oversubscribe -n "$ranks" /tmp/interpolate-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_interpolate.py::test_interpolate_base_form_output --junitxml=../results/independent-n${ranks}.xml 2>&1 | tee ../results/independent-n${ranks}.log
+          done
       - name: Install PyTorch for the FEML composition checks
         id: torch
         if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
@@ -144,14 +154,46 @@ jobs:
           FIREDRAKE_CACHE_DIR: /tmp/interpolate-rhs-n1
         run: |
           cd firedrake-repo
-          timeout -k 10s 240s mpiexec --oversubscribe -n 1 /tmp/interpolate-venv/bin/python -m pytest -q --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py -k 'not nested and not different_space' --junitxml=../results/rhs-n1.xml 2>&1 | tee ../results/rhs-n1.log
+          set +e
+          timeout -k 10s 240s mpiexec --oversubscribe -n 1 /tmp/interpolate-venv/bin/python -m pytest -q --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py --junitxml=../results/rhs-n1.xml > ../results/rhs-n1.log 2>&1
+          result=$?
+          set -e
+          cat ../results/rhs-n1.log
+          test "$result" -le 1
+          /tmp/interpolate-venv/bin/python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse('../results/rhs-n1.xml').getroot().iter('testcase'))
+          assert len(cases) == 21
+          for case in cases:
+              assert case.find('error') is None
+              failure = case.find('failure')
+              if failure is not None:
+                  assert 'nested-' in case.attrib['name'] or 'different_space-' in case.attrib['name']
+                  assert 'Same argument numbers in first and second operands to interpolate.' in (failure.text or '')
+          PY
       - name: Cached adjoint shapes at two ranks
         if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
         env:
           FIREDRAKE_CACHE_DIR: /tmp/interpolate-rhs-n2
         run: |
           cd firedrake-repo
-          timeout -k 10s 240s mpiexec --oversubscribe -n 2 /tmp/interpolate-venv/bin/python -m pytest -q --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py -k 'not nested and not different_space' --junitxml=../results/rhs-n2.xml 2>&1 | tee ../results/rhs-n2.log
+          set +e
+          timeout -k 10s 240s mpiexec --oversubscribe -n 2 /tmp/interpolate-venv/bin/python -m pytest -q --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py --junitxml=../results/rhs-n2.xml > ../results/rhs-n2.log 2>&1
+          result=$?
+          set -e
+          cat ../results/rhs-n2.log
+          test "$result" -le 1
+          /tmp/interpolate-venv/bin/python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse('../results/rhs-n2.xml').getroot().iter('testcase'))
+          assert len(cases) == 21
+          for case in cases:
+              assert case.find('error') is None
+              failure = case.find('failure')
+              if failure is not None:
+                  assert 'nested-' in case.attrib['name'] or 'different_space-' in case.attrib['name']
+                  assert 'Same argument numbers in first and second operands to interpolate.' in (failure.text or '')
+          PY
       - name: Record package inventory
         if: always() && steps.install.outcome == 'success'
         run: |
