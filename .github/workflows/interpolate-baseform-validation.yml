@@ -1,0 +1,163 @@
+name: Validate interpolation of BaseForm outputs
+
+on:
+  push:
+    branches: [codex/validate-interpolate-baseform-output-20261118]
+
+permissions:
+  contents: read
+
+jobs:
+  interpolation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: real
+            image: firedrakeproject/firedrake-vanilla-default@sha256:6b1a7eaebe1013d2eb0abbb71cb872cbf1c3f3c5c480b272a48ac130be470b1e
+          - variant: complex
+            image: firedrakeproject/firedrake-vanilla-complex@sha256:6c1e0921835995095fff7de9328004071f4c9d053276666bcc5e5652be5cc1df
+    container:
+      image: ${{ matrix.image }}
+      options: --cpus 2 --memory 6g
+    env:
+      OMP_NUM_THREADS: 1
+      OPENBLAS_NUM_THREADS: 1
+      OMPI_ALLOW_RUN_AS_ROOT: 1
+      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: 1
+      PYOP3_SPMD_STRICT: 1
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: firedrake-repo
+      - uses: actions/checkout@v7
+        with:
+          repository: FEniCS/ufl
+          ref: a001fce09da7fd6f4339d339eea62a69428317cb
+          path: ufl-src
+      - name: Install pinned sources
+        id: install
+        run: |
+          python3 -m venv --system-site-packages /tmp/interpolate-venv
+          /tmp/interpolate-venv/bin/python -m pip install --no-deps --no-build-isolation -e ./ufl-src
+          /tmp/interpolate-venv/bin/python -m pip install --no-deps --no-build-isolation --config-settings editable_mode=compat -e ./firedrake-repo
+          /tmp/interpolate-venv/bin/python -m pip install 'mpi-pytest>=2026.0' pytest flake8 cython-lint
+          mkdir -p results
+          git -C firedrake-repo rev-parse HEAD > results/firedrake-sha.txt
+          git -C ufl-src rev-parse HEAD > results/ufl-sha.txt
+          /tmp/interpolate-venv/bin/python - <<'PY'
+          import json, platform
+          from pathlib import Path
+          import firedrake, ufl
+          from petsc4py import PETSc
+          from firedrake.utils import complex_mode
+          assert str(Path(firedrake.__file__).resolve()).startswith(str(Path('firedrake-repo').resolve()))
+          assert str(Path(ufl.__file__).resolve()).startswith(str(Path('ufl-src').resolve()))
+          report = {'python': platform.python_version(), 'petsc': PETSc.Sys.getVersion(), 'complex_mode': complex_mode}
+          Path('results/environment.json').write_text(json.dumps(report, indent=2))
+          print(report)
+          PY
+      - name: Source lint
+        if: steps.install.outcome == 'success' && matrix.variant == 'real'
+        run: |
+          cd firedrake-repo
+          PATH=/tmp/interpolate-venv/bin:$PATH make srclint 2>&1 | tee ../results/srclint.log
+      - name: Reproduce the two failures before the fix
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/interpolate-before
+        run: |
+          cd firedrake-repo
+          cp firedrake/interpolation.py /tmp/interpolation-fixed.py
+          trap 'cp /tmp/interpolation-fixed.py firedrake/interpolation.py' EXIT
+          git show c5ac40f23a79c81876f96c9d10fb60b6625c8601:firedrake/interpolation.py > firedrake/interpolation.py
+          set +e
+          timeout -k 10s 120s mpiexec --oversubscribe -n 1 /tmp/interpolate-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_interpolate.py::test_interpolate_base_form_output -k 'scalar and (action or matrix)' --junitxml=../results/before.xml > ../results/before.log 2>&1
+          result=$?
+          set -e
+          cat ../results/before.log
+          test "$result" = 1
+          /tmp/interpolate-venv/bin/python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse('../results/before.xml').getroot().iter('testcase'))
+          assert len(cases) == 2
+          for case in cases:
+              failure = case.find('failure')
+              assert failure is not None
+              assert "has no attribute 'ufl_shape'" in (failure.text or '')
+          PY
+      - name: Interpolation regression at one rank
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/interpolate-n1
+        run: |
+          cd firedrake-repo
+          timeout -k 10s 180s mpiexec --oversubscribe -n 1 /tmp/interpolate-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_interpolate.py::test_interpolate_base_form_output --junitxml=../results/interpolate-n1.xml 2>&1 | tee ../results/interpolate-n1.log
+      - name: Interpolation regression at two ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/interpolate-n2
+        run: |
+          cd firedrake-repo
+          timeout -k 10s 180s mpiexec --oversubscribe -n 2 /tmp/interpolate-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_interpolate.py::test_interpolate_base_form_output --junitxml=../results/interpolate-n2.xml 2>&1 | tee ../results/interpolate-n2.log
+      - name: Existing assembly and interpolation regressions
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/interpolate-existing
+        run: |
+          cd firedrake-repo
+          timeout -k 10s 480s /tmp/interpolate-venv/bin/python -m pytest -q --tb=short -m 'not parallel' tests/firedrake/regression/test_interpolate.py tests/firedrake/regression/test_interp_dual.py tests/firedrake/regression/test_assemble_baseform.py --junitxml=../results/existing.xml 2>&1 | tee ../results/existing.log
+      - name: Existing compositions at three ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/interpolate-existing-n3
+        run: |
+          cd firedrake-repo
+          timeout -k 10s 180s mpiexec --oversubscribe -n 3 /tmp/interpolate-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_interpolate.py::test_interpolate_composition tests/firedrake/regression/test_interpolate.py::test_interpolate_form tests/firedrake/regression/test_interpolate.py::test_interpolate_form_different_shapes tests/firedrake/regression/test_interpolate.py::test_interpolate_form_mixed --junitxml=../results/existing-n3.xml 2>&1 | tee ../results/existing-n3.log
+      - name: Install PyTorch for the FEML composition checks
+        id: torch
+        if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
+        run: /tmp/interpolate-venv/bin/python -m pip install torch==2.15.0+cpu --index-url https://download.pytorch.org/whl/cpu
+      - name: FEML compositions at one rank
+        if: always() && steps.torch.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/interpolate-feml-n1
+        run: |
+          cd firedrake-repo
+          timeout -k 10s 240s mpiexec --oversubscribe -n 1 /tmp/interpolate-venv/bin/python -m pytest -q --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/regression/test_feml_readiness.py --junitxml=../results/composition-n1.xml 2>&1 | tee ../results/composition-n1.log
+      - name: FEML compositions at two ranks
+        if: always() && steps.torch.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/interpolate-feml-n2
+        run: |
+          cd firedrake-repo
+          timeout -k 10s 240s mpiexec --oversubscribe -n 2 /tmp/interpolate-venv/bin/python -m pytest -q --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/regression/test_feml_readiness.py --junitxml=../results/composition-n2.xml 2>&1 | tee ../results/composition-n2.log
+      - name: Cached adjoint shapes at one rank
+        if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/interpolate-rhs-n1
+        run: |
+          cd firedrake-repo
+          timeout -k 10s 240s mpiexec --oversubscribe -n 1 /tmp/interpolate-venv/bin/python -m pytest -q --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py -k 'not nested and not different_space' --junitxml=../results/rhs-n1.xml 2>&1 | tee ../results/rhs-n1.log
+      - name: Cached adjoint shapes at two ranks
+        if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/interpolate-rhs-n2
+        run: |
+          cd firedrake-repo
+          timeout -k 10s 240s mpiexec --oversubscribe -n 2 /tmp/interpolate-venv/bin/python -m pytest -q --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_rhs_shapes_5551.py -k 'not nested and not different_space' --junitxml=../results/rhs-n2.xml 2>&1 | tee ../results/rhs-n2.log
+      - name: Record package inventory
+        if: always() && steps.install.outcome == 'success'
+        run: |
+          /tmp/interpolate-venv/bin/python -m pip freeze > results/pip-freeze.txt
+          /tmp/interpolate-venv/bin/python -m pip check 2>&1 | tee results/pip-check.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: interpolate-${{ matrix.variant }}
+          path: results
