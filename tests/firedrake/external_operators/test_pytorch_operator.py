@@ -1,7 +1,10 @@
 import pytest
 import numpy as np
+import ufl
 
 from ufl.algorithms.ad import expand_derivatives
+from ufl.algorithms.restructure_base_form import restructure_base_form
+from ufl.core.external_operator import ExternalOperator
 
 from firedrake import *
 
@@ -305,3 +308,96 @@ def test_mixed_space_bcs():
 
     result, expected = results
     assert np.allclose(result, expected)
+
+
+@pytest.mark.skiptorch
+@pytest.mark.parallel(nprocs=[1, 2])
+def test_ml_parameters_storage_and_snapshots() -> None:
+    """Keep model and optimiser references valid when restoring parameter values."""
+    model = Linear(2, 1).double()
+    parameters = MLParameters(model.parameters())
+    tensors = tuple(model.parameters())
+    pointers = tuple(t.data_ptr() for t in tensors)
+    assert all(t is p for t, p in zip(parameters.tensors, tensors))
+    assert parameters.ufl_shape == (3,)
+    assert parameters.ufl_domains() == ()
+
+    saved = parameters.copy()
+    assert all(not t.requires_grad for t in saved.tensors)
+    assert all(t.data_ptr() != p.data_ptr() for t, p in zip(saved.tensors, tensors))
+    optimiser = torch.optim.SGD(parameters.tensors, lr=0.1)
+    model(torch.ones(2, dtype=torch.float64)).sum().backward()
+    optimiser.step()
+    for value, original in zip(parameters.tensors, saved.tensors):
+        torch.testing.assert_close(value, original - 0.1)
+
+    assert parameters.assign(saved) is parameters
+    assert tuple(t.data_ptr() for t in parameters.tensors) == pointers
+    assert all(t is p for t, p in zip(parameters.tensors, model.parameters()))
+    for value, original in zip(parameters.tensors, saved.tensors):
+        torch.testing.assert_close(value, original)
+
+
+@pytest.mark.skiptorch
+@pytest.mark.parallel(nprocs=[1, 2])
+@pytest.mark.parametrize("interpolated", [False, True])
+@pytest.mark.parametrize("size", [2, 10000])
+def test_ml_parameters_symbolic_derivative(size: int, interpolated: bool) -> None:
+    """Preserve the parameter space in the pullback through an ML input."""
+    mesh = UnitIntervalMesh(2)
+    V = FunctionSpace(mesh, "CG", 1)
+    u = Function(V)
+    parameters = MLParameters([torch.nn.Parameter(torch.ones(size))])
+    operand = interpolate(u, V) if interpolated else u
+    N = ExternalOperator(operand, parameters, function_space=V)
+    linearization = expand_derivatives(derivative(N, parameters))
+    assert linearization.derivatives == (0, 1)
+    assert linearization.arguments()[-1].ufl_function_space() == parameters.ufl_function_space()
+    form = inner(N, TestFunction(V)) * dx
+    pullback = restructure_base_form(action(adjoint(derivative(form, parameters)), u))
+    argument, = pullback.arguments()
+    assert argument.number() == 0
+    assert argument.ufl_function_space() == parameters.ufl_function_space()
+    assert parameters.ufl_shape == (size,)
+    assert parameters.ufl_domains() == ()
+
+    saved = parameters.copy()
+    replaced = ufl.replace(N, {parameters: saved})
+    assert replaced.ufl_operands[-1] is saved
+    assert type(replaced.ufl_operands[-1]) is MLParameters
+    assert saved.ufl_function_space() == parameters.ufl_function_space()
+    assert saved != parameters
+
+
+@pytest.mark.skiptorch
+@pytest.mark.parallel(nprocs=[1, 2])
+@pytest.mark.parametrize("mismatch", ["shape", "dtype", "count"])
+def test_ml_parameters_assign_mismatch(mismatch: str) -> None:
+    """Reject incompatible snapshots before modifying any parameter."""
+    parameters = MLParameters([torch.ones(2), torch.ones(3)])
+    replacement = [torch.full((2,), 9.0), torch.zeros(3)]
+    if mismatch == "shape":
+        replacement[1] = torch.zeros(4)
+    elif mismatch == "dtype":
+        replacement[1] = replacement[1].double()
+    else:
+        replacement.pop()
+    with pytest.raises(ValueError, match="matching shapes, dtypes and devices"):
+        parameters.assign(MLParameters(replacement))
+    for tensor in parameters.tensors:
+        torch.testing.assert_close(tensor, torch.ones_like(tensor))
+
+
+@pytest.mark.skiptorch
+@pytest.mark.parallel(nprocs=[1, 2])
+@pytest.mark.parametrize("invalid", ["empty", "non_tensor", "integer"])
+def test_ml_parameters_invalid_values(invalid: str) -> None:
+    """Require a nonempty vector of differentiable scalar values."""
+    if invalid == "empty":
+        values, error = [], ValueError
+    elif invalid == "non_tensor":
+        values, error = [1.0], TypeError
+    else:
+        values, error = [torch.ones(2, dtype=torch.int64)], TypeError
+    with pytest.raises(error):
+        MLParameters(values)
