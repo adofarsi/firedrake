@@ -312,9 +312,11 @@ def test_mixed_space_bcs():
 
 @pytest.mark.skiptorch
 @pytest.mark.parallel(nprocs=[1, 2])
-def test_ml_parameters_storage_and_snapshots() -> None:
+@pytest.mark.parametrize("complex_parameters", [False, True])
+def test_ml_parameters_storage_and_snapshots(complex_parameters: bool) -> None:
     """Keep model and optimiser references valid when restoring parameter values."""
-    model = Linear(2, 1).double()
+    dtype = torch.complex128 if complex_parameters else torch.float64
+    model = Linear(2, 1).to(dtype=dtype)
     parameters = MLParameters(model.parameters())
     tensors = tuple(model.parameters())
     pointers = tuple(t.data_ptr() for t in tensors)
@@ -326,7 +328,7 @@ def test_ml_parameters_storage_and_snapshots() -> None:
     assert all(not t.requires_grad for t in saved.tensors)
     assert all(t.data_ptr() != p.data_ptr() for t, p in zip(saved.tensors, tensors))
     optimiser = torch.optim.SGD(parameters.tensors, lr=0.1)
-    model(torch.ones(2, dtype=torch.float64)).sum().backward()
+    model(torch.ones(2, dtype=dtype)).real.sum().backward()
     optimiser.step()
     for value, original in zip(parameters.tensors, saved.tensors):
         torch.testing.assert_close(value, original - 0.1)
@@ -362,6 +364,8 @@ def test_ml_parameters_symbolic_derivative(size: int, interpolated: bool) -> Non
     assert parameters.ufl_domains() == ()
 
     saved = parameters.copy()
+    directional = expand_derivatives(derivative(N, parameters, saved))
+    assert directional.argument_slots()[-1] is saved
     replaced = ufl.replace(N, {parameters: saved})
     assert replaced.ufl_operands[-1] is saved
     assert type(replaced.ufl_operands[-1]) is MLParameters
