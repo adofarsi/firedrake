@@ -56,12 +56,17 @@ class TransposeBuffer:
         return self.buffer
 
 
-def check_buffer_reuse() -> dict:
+def check_buffer_reuse(use_coo: bool) -> dict:
     source = PETSc.Mat().createAIJ(size=(6, 6), nnz=3, comm=MPI.COMM_WORLD)
     first, last = source.getOwnershipRange()
-    rows = np.arange(first, last, dtype=PETSc.IntType)
-    source.setPreallocationCOO(rows, rows.copy())
-    source.setValuesCOO(np.full(len(rows), 2, dtype=PETSc.ScalarType))
+    if use_coo:
+        rows = np.arange(first, last, dtype=PETSc.IntType)
+        source.setPreallocationCOO(rows, rows.copy())
+        source.setValuesCOO(np.full(len(rows), 2, dtype=PETSc.ScalarType))
+    else:
+        diagonal, _ = source.createVecs()
+        diagonal.set(2)
+        source.setDiagonal(diagonal)
     source.assemble()
     assert abs(source.getDiagonal().norm() - 2 * np.sqrt(6)) < 1e-12
     output = source.hermitianTranspose(out=PETSc.Mat())
@@ -79,7 +84,9 @@ def check_buffer_reuse() -> dict:
         assert output.handle == output_handle
         stages.append({"label": label, "allocations": cache.allocations,
                        "work_id": result.getId(), "source_id": source.getId(),
-                       "nonzero_state": nonzero_state(source)})
+                       "nonzero_state": nonzero_state(source),
+                       "local_nz_used": source.getInfo()["nz_used"],
+                       "diagonal_block_nonzero_state": nonzero_state(source.getDiagonalBlock())})
 
     check("initial")
     for scale in (2, -1, 0):
@@ -95,18 +102,22 @@ def check_buffer_reuse() -> dict:
     source.assemble()
     assert abs(source.norm() - 7) < 1e-12
     check("one_rank_inserts_entry")
-    assert cache.allocations == 2, stages
+    structure_rebuilt = cache.allocations == 2
+    if not use_coo:
+        assert structure_rebuilt, stages
 
+    before_replacement = cache.allocations
     previous_source = source
     source = previous_source.copy()
     assert source.getId() != previous_source.getId()
     check("replacement_source_same_graph")
-    assert cache.allocations == 3
+    assert cache.allocations == before_replacement + 1
     source.scale(2)
     check("replacement_source_values_only")
-    assert cache.allocations == 3
+    assert cache.allocations == before_replacement + 1
     return {"stages": stages, "transpose_allocations": cache.allocations,
-            "updates": len(stages)}
+            "updates": len(stages), "structure_rebuilt": structure_rebuilt,
+            "preallocation": "coo" if use_coo else "aij"}
 
 
 def trace_firedrake_sources() -> list[dict]:
@@ -162,7 +173,8 @@ def trace_firedrake_sources() -> list[dict]:
 
 
 report = {"petsc": PETSc.Sys.getVersion(), "ranks": MPI.COMM_WORLD.size,
-          "native_buffer_reuse": check_buffer_reuse(),
+          "native_buffer_reuse": check_buffer_reuse(use_coo=False),
+          "coo_counter_diagnostic": check_buffer_reuse(use_coo=True),
           "firedrake_source_trace": trace_firedrake_sources()}
 reports = MPI.COMM_WORLD.gather(report, root=0)
 if MPI.COMM_WORLD.rank == 0:
