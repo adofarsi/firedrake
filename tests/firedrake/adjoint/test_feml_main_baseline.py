@@ -61,7 +61,7 @@ def test_ml_solve_gradient(placement: str) -> None:
     for seed in (1.0, -2.0, 0.0, 3.0):
         gradient = functional.derivative(adj_input=seed)
         with stop_annotating():
-            expected = assemble(seed * solution_factor**2 * source * v * dx)
+            expected = assemble(Constant(seed) * solution_factor**2 * source * v * dx)
             error = assemble(gradient - expected)
             with error.dat.vec_ro as vector:
                 assert vector.norm() < 1e-10
