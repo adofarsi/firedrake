@@ -1,75 +1,134 @@
-"""Symbolic parameter spaces for machine learning models."""
+"""Symbolic handles for parameters stored in PyTorch."""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Self
 
 import ufl
 from ufl.cell import AbstractCell
-from ufl.finiteelement import AbstractFiniteElement
-from ufl.pullback import AbstractPullback, identity_pullback
-from ufl.sobolevspace import SobolevSpace
+
+if TYPE_CHECKING:
+    import torch
 
 
-class _MLParameterElement(AbstractFiniteElement):
-    """Describe a finite-dimensional parameter vector without a spatial mesh."""
+@dataclass(frozen=True, slots=True)
+class _ParameterElement(ufl.AbstractFiniteElement):
+    """Describe a spatially constant vector by its shape."""
 
-    def __init__(self, size: int) -> None:
-        self._size = size
-
-    def __repr__(self) -> str:
-        return f"_MLParameterElement({self._size})"
+    cell: AbstractCell = field()
+    reference_value_shape: tuple[int, ...] = field()
+    sobolev_space = ufl.HInf
+    pullback = ufl.identity_pullback
+    embedded_subdegree = embedded_superdegree = 0
+    sub_elements = ()
 
     def __str__(self) -> str:
         return repr(self)
 
-    def __hash__(self) -> int:
-        return hash((type(self), self._size))
 
-    def __eq__(self, other: object) -> bool:
-        return type(other) is type(self) and self._size == other._size
-
-    @property
-    def sobolev_space(self) -> SobolevSpace:
-        return ufl.HInf
-
-    @property
-    def pullback(self) -> AbstractPullback:
-        return identity_pullback
-
-    @property
-    def embedded_superdegree(self) -> int:
-        return 0
-
-    @property
-    def embedded_subdegree(self) -> int:
-        return 0
-
-    @property
-    def cell(self) -> AbstractCell:
-        return ufl.vertex
-
-    @property
-    def reference_value_shape(self) -> tuple[int, ...]:
-        return (self._size,)
-
-    @property
-    def sub_elements(self) -> tuple[AbstractFiniteElement, ...]:
-        return ()
-
-
-class AbstractMLParameters(ufl.Coefficient):
-    """Identify a vector of model parameters in UFL.
+class MLParameters(ufl.Coefficient):
+    """Represent PyTorch tensors as a single symbolic parameter vector.
 
     Parameters
     ----------
-    size : int
-        Number of scalar parameters.
+    parameters : Iterable[torch.Tensor]
+        Tensors to reference, normally ``model.parameters()``. Their order and
+        shapes define the parameter vector and must remain fixed. All tensors
+        must have floating-point or complex values.
+    mesh : ufl.Mesh
+        Mesh of the PDE that uses these parameters. The parameter vector is
+        spatially constant on this mesh.
 
     Notes
     -----
-    Subclasses provide numerical storage in their machine learning framework.
-    The UFL space describes a global parameter vector. Its metadata has no
-    mesh, degree-of-freedom map, or numerical allocation.
+    Construction retains the supplied tensors and their PyTorch storage.
+    UFL records their total size and the mesh of the external operator.
+    Each MPI rank retains its own model parameters.
+
+    Create the handle after moving the model to its intended dtype and device.
+    In-place optimiser steps remain visible through the handle. If the model
+    replaces its parameter objects, create a new handle.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from firedrake import UnitIntervalMesh
+    >>> mesh = UnitIntervalMesh(2)
+    >>> model = torch.nn.Linear(2, 1)
+    >>> parameters = MLParameters(model.parameters(), mesh=mesh)
+    >>> saved_parameters = parameters.copy()
+    >>> _ = parameters.assign(saved_parameters)
     """
 
-    def __init__(self, size: int) -> None:
-        if size < 1:
+    def __new__(cls, *args: object, **kwargs: object) -> Self:
+        # A parameter block is always a primal coefficient.
+        return object.__new__(cls)
+
+    def __init__(self, parameters: Iterable[torch.Tensor], *, mesh: ufl.Mesh) -> None:
+        import torch
+
+        self._tensors = tuple(parameters)
+        if any(not isinstance(t, torch.Tensor) for t in self._tensors):
+            raise TypeError("Model parameters must be PyTorch tensors.")
+        if any(not (t.is_floating_point() or t.is_complex()) for t in self._tensors):
+            raise TypeError("Model parameters must have floating-point or complex values.")
+        size = sum(t.numel() for t in self._tensors)
+        if size == 0:
             raise ValueError("A parameter vector must contain at least one scalar.")
-        super().__init__(ufl.FunctionSpace(None, _MLParameterElement(size)))
+        element = _ParameterElement(mesh.ufl_cell(), (size,))
+        super().__init__(ufl.FunctionSpace(mesh, element))
+
+    @property
+    def tensors(self) -> tuple[torch.Tensor, ...]:
+        """Return the native parameter tensors.
+
+        Returns
+        -------
+        tuple[torch.Tensor]
+            References to the tensors in parameter order.
+        """
+        return self._tensors
+
+    def copy(self) -> "MLParameters":
+        """Copy parameter values without retaining their autograd history.
+
+        Returns
+        -------
+        MLParameters
+            Independent tensors with the same shapes, dtypes and devices.
+        """
+        return type(self)((t.detach().clone() for t in self._tensors), mesh=self.ufl_domain())
+
+    def assign(self, other: "MLParameters") -> "MLParameters":
+        """Copy values while preserving the original tensors and their storage.
+
+        Parameters
+        ----------
+        other : MLParameters
+            Values with the same tensor shapes, dtypes and devices.
+
+        Returns
+        -------
+        MLParameters
+            This parameter vector.
+
+        Raises
+        ------
+        ValueError
+            If the tensor shapes, dtypes or devices differ.
+        """
+        import torch
+
+        source = other.tensors
+        target = self._tensors
+        if len(source) != len(target) or any(
+            (s.shape, s.dtype, s.device) != (t.shape, t.dtype, t.device)
+            for s, t in zip(source, target)
+        ):
+            raise ValueError("Parameter tensors must have matching shapes, dtypes and devices.")
+        with torch.no_grad():
+            for t, s in zip(target, source):
+                t.copy_(s)
+        return self

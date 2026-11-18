@@ -317,12 +317,13 @@ def test_ml_parameters_storage_and_snapshots(complex_parameters: bool) -> None:
     """Keep model and optimiser references valid when restoring parameter values."""
     dtype = torch.complex128 if complex_parameters else torch.float64
     model = Linear(2, 1).to(dtype=dtype)
-    parameters = MLParameters(model.parameters())
+    mesh = UnitIntervalMesh(2)
+    parameters = MLParameters(parameters=model.parameters(), mesh=mesh)
     tensors = tuple(model.parameters())
     pointers = tuple(t.data_ptr() for t in tensors)
     assert all(t is p for t, p in zip(parameters.tensors, tensors))
     assert parameters.ufl_shape == (3,)
-    assert parameters.ufl_domains() == ()
+    assert parameters.ufl_domains() == (mesh,)
 
     saved = parameters.copy()
     assert all(not t.requires_grad for t in saved.tensors)
@@ -349,19 +350,21 @@ def test_ml_parameters_symbolic_derivative(size: int, interpolated: bool) -> Non
     mesh = UnitIntervalMesh(2)
     V = FunctionSpace(mesh, "CG", 1)
     u = Function(V)
-    parameters = MLParameters([torch.nn.Parameter(torch.ones(size))])
+    parameters = MLParameters([torch.nn.Parameter(torch.ones(size))], mesh=mesh)
     operand = interpolate(u, V) if interpolated else u
     N = ExternalOperator(operand, parameters, function_space=V)
     linearization = expand_derivatives(derivative(N, parameters))
     assert linearization.derivatives == (0, 1)
     assert linearization.arguments()[-1].ufl_function_space() == parameters.ufl_function_space()
     form = inner(N, TestFunction(V)) * dx
+    assert form.domain_numbering() == {mesh: 0}
+    assert isinstance(form.signature(), str)
     pullback = restructure_base_form(action(adjoint(derivative(form, parameters)), u))
     argument, = pullback.arguments()
     assert argument.number() == 0
     assert argument.ufl_function_space() == parameters.ufl_function_space()
     assert parameters.ufl_shape == (size,)
-    assert parameters.ufl_domains() == ()
+    assert parameters.ufl_domains() == (mesh,)
 
     saved = parameters.copy()
     direction = linearization.arguments()[-1]
@@ -377,10 +380,28 @@ def test_ml_parameters_symbolic_derivative(size: int, interpolated: bool) -> Non
 
 @pytest.mark.skiptorch
 @pytest.mark.parallel(nprocs=[1, 2])
+def test_ml_parameters_on_two_meshes() -> None:
+    """Share native tensors between two mesh-specific parameter symbols."""
+    model = Linear(2, 1)
+    first = MLParameters(model.parameters(), mesh=UnitIntervalMesh(2))
+    second = MLParameters(model.parameters(), mesh=UnitIntervalMesh(3))
+    assert first.ufl_function_space() != second.ufl_function_space()
+    assert all(a is b for a, b in zip(first.tensors, second.tensors, strict=True))
+    for parameters in (first, second):
+        mesh = parameters.ufl_domain()
+        V = FunctionSpace(mesh, "CG", 1)
+        N = ExternalOperator(Function(V), parameters, function_space=V)
+        form = inner(N, TestFunction(V)) * dx
+        assert form.domain_numbering() == {mesh: 0}
+
+
+@pytest.mark.skiptorch
+@pytest.mark.parallel(nprocs=[1, 2])
 @pytest.mark.parametrize("mismatch", ["shape", "dtype", "count"])
 def test_ml_parameters_assign_mismatch(mismatch: str) -> None:
     """Reject incompatible snapshots before modifying any parameter."""
-    parameters = MLParameters([torch.ones(2), torch.ones(3)])
+    mesh = UnitIntervalMesh(1)
+    parameters = MLParameters([torch.ones(2), torch.ones(3)], mesh=mesh)
     replacement = [torch.full((2,), 9.0), torch.zeros(3)]
     if mismatch == "shape":
         replacement[1] = torch.zeros(4)
@@ -389,7 +410,7 @@ def test_ml_parameters_assign_mismatch(mismatch: str) -> None:
     else:
         replacement.pop()
     with pytest.raises(ValueError, match="matching shapes, dtypes and devices"):
-        parameters.assign(MLParameters(replacement))
+        parameters.assign(MLParameters(replacement, mesh=mesh))
     for tensor in parameters.tensors:
         torch.testing.assert_close(tensor, torch.ones_like(tensor))
 
@@ -406,4 +427,4 @@ def test_ml_parameters_invalid_values(invalid: str) -> None:
     else:
         values, error = [torch.ones(2, dtype=torch.int64)], TypeError
     with pytest.raises(error):
-        MLParameters(values)
+        MLParameters(values, mesh=UnitIntervalMesh(1))
