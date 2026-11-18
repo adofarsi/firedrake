@@ -1,0 +1,77 @@
+name: Verify minimal interpolation example
+
+on:
+  push:
+    branches: [codex/validate-interpolate-example-20261118]
+
+permissions:
+  contents: read
+
+jobs:
+  example:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container:
+      image: firedrakeproject/firedrake-vanilla-default@sha256:6b1a7eaebe1013d2eb0abbb71cb872cbf1c3f3c5c480b272a48ac130be470b1e
+      options: --cpus 2 --memory 4g
+    env:
+      OMP_NUM_THREADS: 1
+      OPENBLAS_NUM_THREADS: 1
+      OMPI_ALLOW_RUN_AS_ROOT: 1
+      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: 1
+      FIREDRAKE_CACHE_DIR: /tmp/minimal-interpolate-cache
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ca4e74116bad3706f8f0d853b0167645954bd3ba
+          path: firedrake-repo
+      - uses: actions/checkout@v7
+        with:
+          repository: FEniCS/ufl
+          ref: a001fce09da7fd6f4339d339eea62a69428317cb
+          path: ufl-src
+      - name: Install the pinned sources
+        run: |
+          python3 -m venv --system-site-packages /tmp/example-venv
+          /tmp/example-venv/bin/python -m pip install --no-deps --no-build-isolation -e ./ufl-src
+          /tmp/example-venv/bin/python -m pip install --no-deps --no-build-isolation --config-settings editable_mode=compat -e ./firedrake-repo
+          mkdir -p results
+          git -C firedrake-repo rev-parse HEAD > results/firedrake-sha.txt
+          git -C ufl-src rev-parse HEAD > results/ufl-sha.txt
+      - name: Run the self-contained example
+        run: |
+          cat > results/example.py <<'PY'
+          from firedrake import *
+
+          mesh = UnitIntervalMesh(4)
+          V = VectorFunctionSpace(mesh, "CG", 1, dim=2)
+          Q = FunctionSpace(mesh, "CG", 1)
+          D = FunctionSpace(mesh, "DG", 0)
+          x, = SpatialCoordinate(mesh)
+
+          # Build a linear map that sums the two vector components.
+          u = TrialFunction(V)
+          A = assemble(interpolate(u[0] + u[1], Q))
+
+          # Interpolate the map's scalar output into a DG0 space.
+          transfer = interpolate(A, D)
+
+          f = Function(V).interpolate(as_vector((1 + x, 2 - x)))
+          result = assemble(action(transfer, f))
+          expected = Function(D).assign(3)
+          error = norm(assemble(result - expected))
+          assert error < 1e-12
+          if mesh.comm.rank == 0:
+              print(f"Scalar result is 3 everywhere. L2 error = {error:.2e}")
+          PY
+          for ranks in 1 2; do
+            timeout -k 10s 120s mpiexec --oversubscribe -n "$ranks" /tmp/example-venv/bin/python results/example.py 2>&1 | tee results/example-n${ranks}.log
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minimal-interpolation-example
+          path: results
