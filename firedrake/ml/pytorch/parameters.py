@@ -33,9 +33,10 @@ class MLParameters(AbstractMLParameters):
 
     Examples
     --------
+    >>> model = torch.nn.Linear(2, 1)
     >>> parameters = MLParameters(model.parameters())
     >>> saved_parameters = parameters.copy()
-    >>> parameters.assign(saved_parameters)
+    >>> _ = parameters.assign(saved_parameters)
     """
 
     def __init__(self, parameters: Iterable[torch.Tensor]) -> None:

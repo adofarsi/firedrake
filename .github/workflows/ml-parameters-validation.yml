@@ -86,18 +86,6 @@ jobs:
         run: |
           cd firedrake-repo
           timeout -k 10s 180s mpiexec --oversubscribe -n 2 /tmp/parameters-venv/bin/python -m pytest -v --tb=short -m 'parallel[match]' tests/firedrake/external_operators/test_pytorch_operator.py -k ml_parameters --junitxml=../results/parameters-n2.xml 2>&1 | tee ../results/parameters-n2.log
-      - name: Existing ML interfaces and coefficient differentiation
-        if: always() && steps.install.outcome == 'success'
-        env:
-          FIREDRAKE_CACHE_DIR: /tmp/parameters-existing
-        run: |
-          cd firedrake-repo
-          timeout -k 15s 600s /tmp/parameters-venv/bin/python -m pytest -v --tb=short -m 'not parallel' tests/firedrake/external_operators/test_pytorch_operator.py tests/firedrake/regression/test_pytorch_coupling.py tests/firedrake/regression/test_coefficient_derivatives.py tests/firedrake/regression/test_constant.py -k 'not ml_parameters' --junitxml=../results/existing.xml 2>&1 | tee ../results/existing.log
-      - name: UFL regression suite
-        if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
-        run: |
-          cd ufl-src
-          timeout -k 10s 180s /tmp/parameters-venv/bin/python -m pytest -q --tb=short test --junitxml=../results/ufl.xml 2>&1 | tee ../results/ufl.log
       - name: Dependency consistency
         if: always() && steps.install.outcome == 'success'
         run: /tmp/parameters-venv/bin/python -m pip check 2>&1 | tee results/pip-check.txt

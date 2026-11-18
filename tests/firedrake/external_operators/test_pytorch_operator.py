@@ -364,7 +364,9 @@ def test_ml_parameters_symbolic_derivative(size: int, interpolated: bool) -> Non
     assert parameters.ufl_domains() == ()
 
     saved = parameters.copy()
-    directional = expand_derivatives(derivative(N, parameters, saved))
+    direction = linearization.arguments()[-1]
+    assert expand_derivatives(derivative(N, parameters, direction)) == linearization
+    directional = restructure_base_form(action(linearization, saved))
     assert directional.argument_slots()[-1] is saved
     replaced = ufl.replace(N, {parameters: saved})
     assert replaced.ufl_operands[-1] is saved
