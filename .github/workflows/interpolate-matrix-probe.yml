@@ -30,6 +30,7 @@ jobs:
       OMPI_ALLOW_RUN_AS_ROOT: 1
       OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: 1
       FIREDRAKE_CACHE_DIR: /tmp/interpolation-matrix-probe
+      UFL_VARIANT: ${{ matrix.variant }}
     defaults:
       run:
         shell: bash
@@ -51,6 +52,20 @@ jobs:
           mkdir -p results
           git -C firedrake-repo rev-parse HEAD > results/firedrake-sha.txt
           git -C ufl-src rev-parse HEAD > results/ufl-sha.txt
+          if [ "$UFL_VARIANT" != main ]; then
+            /tmp/probe-venv/bin/python - <<'PY'
+          import difflib
+          from pathlib import Path
+          path = Path('firedrake-repo/firedrake/assemble.py')
+          before = path.read_text()
+          old = 'restructure_base_form(expr, complex_mode=is_complex(scalar_type))'
+          assert before.count(old) == 1
+          after = before.replace(old, 'restructure_base_form(expr)')
+          path.write_text(after)
+          patch = difflib.unified_diff(before.splitlines(keepends=True), after.splitlines(keepends=True), fromfile='a/firedrake/assemble.py', tofile='b/firedrake/assemble.py')
+          Path('results/ufl-api-compatibility.patch').write_text(''.join(patch))
+          PY
+          fi
       - name: Trace the minimal cases
         run: |
           cd firedrake-repo
