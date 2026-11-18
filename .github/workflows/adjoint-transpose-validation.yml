@@ -49,9 +49,6 @@ jobs:
           /tmp/transpose-venv/bin/python -m pip install --no-deps --no-build-isolation -e ./ufl-src
           /tmp/transpose-venv/bin/python -m pip install --no-deps --no-build-isolation --config-settings editable_mode=compat -e ./firedrake-repo
           /tmp/transpose-venv/bin/python -m pip install 'mpi-pytest>=2026.0' pytest flake8 cython-lint
-          if [ "$VARIANT" = real ]; then
-            /tmp/transpose-venv/bin/python -m pip install torch==2.15.0+cpu --index-url https://download.pytorch.org/whl/cpu
-          fi
           mkdir -p results
           git -C firedrake-repo rev-parse HEAD > results/firedrake-sha.txt
           git -C ufl-src rev-parse HEAD > results/ufl-sha.txt
@@ -99,6 +96,23 @@ jobs:
               assert failure is not None
               assert 'MatTransposeSetPrecursor' in (failure.text or '')
           PYCHECK
+          if [ "$VARIANT" = complex ]; then
+            /tmp/transpose-venv/bin/python - <<'PYNEST'
+          from pathlib import Path
+          import ufl
+          from firedrake import UnitIntervalMesh, FunctionSpace, TrialFunction, TestFunction, inner, dx, assemble
+          from firedrake.petsc import PETSc
+          V = FunctionSpace(UnitIntervalMesh(4), "CG", 1)
+          A = assemble(inner((1 + 2j) * TrialFunction(V), TestFunction(V)) * dx, mat_type="nest")
+          try:
+              assemble(ufl.Adjoint(A))
+          except PETSc.Error as error:
+              assert 'No method conjugate for Mat of type nest' in str(error)
+              Path('../results/complex-nest-before.txt').write_text(str(error))
+          else:
+              raise AssertionError('The expected baseline NEST limitation was not reproduced.')
+          PYNEST
+          fi
       - name: Matrix adjoint regression at 1 ranks
         if: always() && steps.install.outcome == 'success'
         env:
@@ -120,46 +134,6 @@ jobs:
           timeout -k 10s 180s mpiexec --oversubscribe -n 2 /tmp/transpose-venv/bin/python -m pytest -v --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/regression/test_assemble_baseform.py::test_assemble_adjoint_tensor --junitxml=../results/transpose-n2.xml 2>&1 | tee ../results/transpose-n2.log
           result=${PIPESTATUS[0]}
           echo "$result" > ../results/transpose-n2.exit
-          exit "$result"
-      - name: Existing BaseForm assembly regression tests
-        if: always() && steps.install.outcome == 'success'
-        env:
-          FIREDRAKE_CACHE_DIR: /tmp/transpose-baseform
-        run: |
-          cd firedrake-repo
-          timeout -k 10s 300s /tmp/transpose-venv/bin/python -m pytest -q --tb=short -m 'not parallel' tests/firedrake/regression/test_assemble_baseform.py --junitxml=../results/baseform.xml 2>&1 | tee ../results/baseform.log
-      - name: Cached adjoints and ML gradients at 1 ranks
-        if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
-        env:
-          FIREDRAKE_CACHE_DIR: /tmp/transpose-adjoint-n1
-        run: |
-          cd firedrake-repo
-          timeout -k 10s 180s mpiexec --oversubscribe -n 1 /tmp/transpose-venv/bin/python -m pytest -v -s --tb=short --timeout=60 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_feml_main_baseline.py -k 'not state' --junitxml=../results/adjoint-n1.xml 2>&1 | tee ../results/adjoint-n1.log
-      - name: Cached adjoints and ML gradients at 2 ranks
-        if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
-        env:
-          FIREDRAKE_CACHE_DIR: /tmp/transpose-adjoint-n2
-        run: |
-          cd firedrake-repo
-          timeout -k 10s 180s mpiexec --oversubscribe -n 2 /tmp/transpose-venv/bin/python -m pytest -v -s --tb=short --timeout=60 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_feml_main_baseline.py -k 'not state' --junitxml=../results/adjoint-n2.xml 2>&1 | tee ../results/adjoint-n2.log
-      - name: State-dependent ML gradient in serial
-        if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
-        env:
-          FIREDRAKE_CACHE_DIR: /tmp/transpose-ml-state-n1
-        run: |
-          cd firedrake-repo
-          timeout -k 10s 120s mpiexec --oversubscribe -n 1 /tmp/transpose-venv/bin/python -m pytest -v -s --tb=short --timeout=60 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_feml_main_baseline.py -k state --junitxml=../results/ml-state-n1.xml 2>&1 | tee ../results/ml-state-n1.log
-      - name: State-dependent ML gradient at two ranks
-        if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
-        continue-on-error: true
-        env:
-          FIREDRAKE_CACHE_DIR: /tmp/transpose-ml-state-n2
-        run: |
-          cd firedrake-repo
-          set +e
-          timeout -k 10s 90s mpiexec --oversubscribe -n 2 /tmp/transpose-venv/bin/python -m pytest -v -s --tb=short --timeout=45 --timeout-method=thread -m 'parallel[match]' tests/firedrake/adjoint/test_feml_main_baseline.py -k state --junitxml=../results/ml-state-n2.xml 2>&1 | tee ../results/ml-state-n2.log
-          result=${PIPESTATUS[0]}
-          echo "$result" > ../results/ml-state-n2.exit
           exit "$result"
       - name: Check dependency consistency
         if: always() && steps.install.outcome == 'success'

@@ -3,6 +3,7 @@ import numpy as np
 from firedrake import *
 from firedrake.assemble import get_assembler
 from firedrake.matrix import ImplicitMatrix
+from firedrake.petsc import PETSc
 from firedrake.utils import ScalarType, complex_mode
 import ufl
 
@@ -89,7 +90,13 @@ def test_assemble_adjoint(M):
 
 
 @pytest.mark.parallel(nprocs=[1, 2])
-@pytest.mark.parametrize("mat_type", ["aij", "nest"])
+@pytest.mark.parametrize("mat_type", [
+    "aij",
+    pytest.param("nest", marks=pytest.mark.xfail(
+        complex_mode, raises=PETSc.Error,
+        reason="PETSc MatNest does not implement conjugation.",
+    )),
+])
 @pytest.mark.parametrize("degree", [1, 2])
 @pytest.mark.parametrize("measure", [dx, ds], ids=["cell", "boundary"])
 def test_assemble_adjoint_tensor(mat_type: str, degree: int, measure: ufl.Measure) -> None:
