@@ -1,0 +1,62 @@
+name: Assess transpose buffer reuse
+
+on:
+  push:
+    branches: [codex/assess-transpose-reuse-20261118]
+
+permissions:
+  contents: read
+
+jobs:
+  assess:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    container:
+      image: firedrakeproject/firedrake-vanilla-default@sha256:6b1a7eaebe1013d2eb0abbb71cb872cbf1c3f3c5c480b272a48ac130be470b1e
+      options: --cpus 2 --memory 6g
+    env:
+      OMP_NUM_THREADS: 1
+      OPENBLAS_NUM_THREADS: 1
+      OMPI_ALLOW_RUN_AS_ROOT: 1
+      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: 1
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: firedrake-repo
+      - uses: actions/checkout@v7
+        with:
+          repository: FEniCS/ufl
+          ref: a001fce09da7fd6f4339d339eea62a69428317cb
+          path: ufl-src
+      - name: Install pinned sources
+        id: install
+        run: |
+          python3 -m venv --system-site-packages /tmp/reuse-venv
+          /tmp/reuse-venv/bin/python -m pip install --no-deps --no-build-isolation -e ./ufl-src
+          /tmp/reuse-venv/bin/python -m pip install --no-deps --no-build-isolation --config-settings editable_mode=compat -e ./firedrake-repo
+          mkdir -p results
+          git -C firedrake-repo rev-parse HEAD > results/firedrake-sha.txt
+          git -C ufl-src rev-parse HEAD > results/ufl-sha.txt
+          /tmp/reuse-venv/bin/python -m pip freeze > results/pip-freeze.txt
+      - name: Assess reuse at one rank
+        if: steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/reuse-n1
+        run: |
+          cd firedrake-repo
+          timeout -k 10s 180s mpiexec --oversubscribe -n 1 /tmp/reuse-venv/bin/python transpose_reuse_assessment.py 2>&1 | tee ../results/reuse-n1.log
+      - name: Assess reuse at two ranks
+        if: always() && steps.install.outcome == 'success'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/reuse-n2
+        run: |
+          cd firedrake-repo
+          timeout -k 10s 180s mpiexec --oversubscribe -n 2 /tmp/reuse-venv/bin/python transpose_reuse_assessment.py 2>&1 | tee ../results/reuse-n2.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: transpose-reuse-assessment
+          path: results
