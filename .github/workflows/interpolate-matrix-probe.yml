@@ -1,0 +1,47 @@
+name: Diagnose matrix-valued interpolation
+
+on:
+  push:
+    branches: [codex/diagnose-interpolate-matrix-20261118]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container:
+      image: firedrakeproject/firedrake-vanilla-default@sha256:6b1a7eaebe1013d2eb0abbb71cb872cbf1c3f3c5c480b272a48ac130be470b1e
+      options: --cpus 2 --memory 4g
+    env:
+      OMP_NUM_THREADS: 1
+      OPENBLAS_NUM_THREADS: 1
+      FIREDRAKE_CACHE_DIR: /tmp/interpolation-matrix-probe
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: firedrake-repo
+      - uses: actions/checkout@v7
+        with:
+          repository: FEniCS/ufl
+          ref: a001fce09da7fd6f4339d339eea62a69428317cb
+          path: ufl-src
+      - name: Install pinned sources
+        run: |
+          python3 -m venv --system-site-packages /tmp/probe-venv
+          /tmp/probe-venv/bin/python -m pip install --no-deps --no-build-isolation -e ./ufl-src
+          /tmp/probe-venv/bin/python -m pip install --no-deps --no-build-isolation --config-settings editable_mode=compat -e ./firedrake-repo
+          mkdir -p results
+      - name: Trace the minimal cases
+        run: |
+          cd firedrake-repo
+          timeout -k 10s 180s /tmp/probe-venv/bin/python interpolate_matrix_probe.py 2>&1 | tee ../results/matrix-probe.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: interpolation-matrix-probe
+          path: results
