@@ -11,12 +11,24 @@ jobs:
   probe:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: main
+            ufl: a001fce09da7fd6f4339d339eea62a69428317cb
+          - variant: ufl554
+            ufl: dca060ff8ec6b244bc0fae122488e94512c719df
+          - variant: ufl558
+            ufl: 470dea96f48a77802cb28379f791d48a86c47937
     container:
       image: firedrakeproject/firedrake-vanilla-default@sha256:6b1a7eaebe1013d2eb0abbb71cb872cbf1c3f3c5c480b272a48ac130be470b1e
       options: --cpus 2 --memory 4g
     env:
       OMP_NUM_THREADS: 1
       OPENBLAS_NUM_THREADS: 1
+      OMPI_ALLOW_RUN_AS_ROOT: 1
+      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: 1
       FIREDRAKE_CACHE_DIR: /tmp/interpolation-matrix-probe
     defaults:
       run:
@@ -28,20 +40,35 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: FEniCS/ufl
-          ref: a001fce09da7fd6f4339d339eea62a69428317cb
+          ref: ${{ matrix.ufl }}
           path: ufl-src
       - name: Install pinned sources
         run: |
           python3 -m venv --system-site-packages /tmp/probe-venv
           /tmp/probe-venv/bin/python -m pip install --no-deps --no-build-isolation -e ./ufl-src
           /tmp/probe-venv/bin/python -m pip install --no-deps --no-build-isolation --config-settings editable_mode=compat -e ./firedrake-repo
+          /tmp/probe-venv/bin/python -m pip install 'mpi-pytest>=2026.0' pytest
           mkdir -p results
+          git -C firedrake-repo rev-parse HEAD > results/firedrake-sha.txt
+          git -C ufl-src rev-parse HEAD > results/ufl-sha.txt
       - name: Trace the minimal cases
         run: |
           cd firedrake-repo
           timeout -k 10s 180s /tmp/probe-venv/bin/python interpolate_matrix_probe.py 2>&1 | tee ../results/matrix-probe.log
+      - name: Compare interpolation and residual regressions
+        if: always()
+        run: |
+          cd firedrake-repo
+          set +e
+          for ranks in 1 2; do
+            FIREDRAKE_CACHE_DIR=/tmp/interpolation-compare-n${ranks} timeout -k 10s 240s mpiexec --oversubscribe -n "$ranks" /tmp/probe-venv/bin/python -m pytest -q --tb=short --timeout=90 --timeout-method=thread -m 'parallel[match]' tests/firedrake/regression/test_interpolate.py::test_interpolate_base_form_output tests/firedrake/adjoint/test_rhs_shapes_5551.py --junitxml=../results/comparison-n${ranks}.xml > ../results/comparison-n${ranks}.log 2>&1
+            result=$?
+            echo "$result" > ../results/comparison-n${ranks}.exit
+            cat ../results/comparison-n${ranks}.log
+          done
+          exit 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: interpolation-matrix-probe
+          name: interpolation-matrix-probe-${{ matrix.variant }}
           path: results
