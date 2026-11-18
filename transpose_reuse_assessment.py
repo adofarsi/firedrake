@@ -85,7 +85,7 @@ def check_buffer_reuse(use_coo: bool) -> dict:
         stages.append({"label": label, "allocations": cache.allocations,
                        "work_id": result.getId(), "source_id": source.getId(),
                        "nonzero_state": nonzero_state(source),
-                       "local_nz_used": source.getInfo()["nz_used"],
+                       "local_nz_used": source.getInfo(PETSc.Mat.InfoType.LOCAL)["nz_used"],
                        "diagonal_block_nonzero_state": nonzero_state(source.getDiagonalBlock())})
 
     check("initial")
