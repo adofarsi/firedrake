@@ -121,7 +121,7 @@ class PytorchOperator(MLOperator):
         return from_torch(y_P, self.ufl_function_space())
 
     def _network_input(self, values):
-        """Pack local field values for a model with an explicit parameter operand."""
+        """Pack field values for a model with an explicit parameter operand."""
         if self.inputs_format == 1:
             values = [v.reshape(-1, prod(field.ufl_shape)) for v, field in zip(values, self._fields, strict=True)]
             x = torch.cat(values, dim=1)
@@ -133,10 +133,22 @@ class PytorchOperator(MLOperator):
             dtype = torch.promote_types(dtype, torch.complex64)
         return x.to(device=reference.device, dtype=dtype)
 
+    def _field_values(self, field):
+        """Global models see each complete input in PETSc ownership order."""
+        return to_torch(field, gather=self.inputs_format == 0, batched=False)
+
+    def _owned_values(self, values, space):
+        layout = space.template_vec
+        expected = layout.getSize() if self.inputs_format == 0 else layout.getLocalSize()
+        if values.numel() != expected:
+            raise ValueError(f"Model returned {values.numel()} values for a field with {expected} entries.")
+        values = values.reshape(-1)
+        return values[slice(*layout.getOwnershipRange())] if self.inputs_format == 0 else values
+
     def _linearization(self):
         """Vary just the differentiated operand, keeping all other inputs fixed."""
         operand = self.ufl_operands[self.derivatives.index(1)]
-        values = tuple(to_torch(field, batched=False) for field in self._fields)
+        values = tuple(map(self._field_values, self._fields))
         if operand is self._parameters:
             x = self._network_input(values)
 
@@ -164,19 +176,13 @@ class PytorchOperator(MLOperator):
         if self._parameters is not None:
             evaluate, inputs = self._linearization()
             output, pullback = torch.func.vjp(evaluate, *inputs)
-            seed = to_torch(y, batched=False).to(output)
+            seed = self._field_values(y).to(output)
             gradients = pullback(seed.reshape_as(output))
             operand = self.ufl_operands[self.derivatives.index(1)]
             if operand is self._parameters:
-                # Owned output DoFs supply each rank's share of the replicated weight gradient.
-                blocks = []
-                for gradient in gradients:
-                    local = gradient.detach().resolve_conj().contiguous().cpu().numpy()
-                    total = np.empty_like(local)
-                    self.function_space().comm.Allreduce(local, total, op=MPI.SUM)
-                    blocks.append(torch.from_numpy(total).to(gradient))
-                return MLParameterGradient(operand, tuple(blocks))
-            return from_torch(gradients[0].detach().resolve_conj().cpu(), operand.ufl_function_space().dual())
+                return MLParameterGradient(operand, tuple(self._weight_gradient(g) for g in gradients))
+            space = operand.ufl_function_space().dual()
+            return from_torch(self._owned_values(gradients[0], space).detach().resolve_conj().cpu(), space)
         model = self.model
         x = self._pre_forward_callback(*self.ufl_operands)
         y_P = self._pre_forward_callback(y)
@@ -184,13 +190,26 @@ class PytorchOperator(MLOperator):
         vjp_F = self._post_forward_callback(vjp)
         return vjp_F
 
+    def _weight_gradient(self, gradient):
+        """Reduce pointwise contributions from owned DoFs; global models already see the full seed."""
+        gradient = gradient.detach()
+        if self.inputs_format == 0:
+            return gradient.clone()
+        # MPI provides sum reductions for single and double precision.
+        dtype = torch.promote_types(gradient.dtype, torch.float32)
+        local = gradient.resolve_conj().to(device="cpu", dtype=dtype).contiguous().numpy()
+        total = np.empty_like(local)
+        self.function_space().comm.Allreduce(local, total, op=MPI.SUM)
+        return torch.from_numpy(total).to(gradient)
+
     def _jvp(self, z):
         """Implement the Jacobian-vector product (JVP) for a given vector `z`."""
         if self._parameters is not None:
             evaluate, inputs = self._linearization()
-            tangent = z.tensors if isinstance(z, MLParameters) else (to_torch(z, batched=False),)
+            tangent = z.tensors if isinstance(z, MLParameters) else (self._field_values(z),)
             _, jvp = torch.func.jvp(evaluate, inputs, tangent)
-            return from_torch(jvp.detach().cpu(), self.function_space())
+            V = self.function_space()
+            return from_torch(self._owned_values(jvp, V).detach().resolve_conj().cpu(), V)
         model = self.model
         x = self._pre_forward_callback(*self.ufl_operands)
         z_P = self._pre_forward_callback(z)
@@ -206,28 +225,31 @@ class PytorchOperator(MLOperator):
                 raise NotImplementedError("Apply the weight Jacobian or its adjoint to a direction.")
             evaluate, (x,) = self._linearization()
 
-            # Each owned input block maps to the owned output block on the same rank.
-            def push(direction):
-                return torch.func.jvp(evaluate, (x,), (direction,))[1]
+            V = self.function_space()
+            rows = V.template_vec
+            cols = operand.ufl_function_space().template_vec
+            # One direction per input component suffices for all nodes of a pointwise model.
+            width = prod(operand.ufl_shape) if self.inputs_format == 1 else cols.getSize()
+            directions = torch.eye(width, dtype=x.dtype, device=x.device).repeat(1, x.numel() // width)
 
-            directions = torch.eye(x.numel(), dtype=x.dtype, device=x.device)
-            if x.numel():
-                columns = torch.vmap(push)(directions)
-                if x.is_complex() and not torch.allclose(torch.vmap(push)(1j * directions), 1j * columns):
+            def push(direction):
+                jvp = torch.func.jvp(evaluate, (x,), (direction,))[1]
+                return self._owned_values(jvp, V)
+
+            columns = torch.vmap(push)(directions)
+            if x.is_complex():
+                linear = torch.allclose(torch.vmap(push)(1j * directions), 1j * columns)
+                if not V.comm.allreduce(linear, op=MPI.LAND):
                     raise ValueError("A complex PETSc Jacobian requires a complex-linear derivative.")
-                jac = columns.T.detach().cpu().numpy()
-            else:
-                jac = np.empty((evaluate(x).numel(), 0), dtype=utils.ScalarType)
-            n, m = jac.shape
-            J = PETSc.Mat().create(comm=self.function_space().comm)
-            J.setSizes(((n, None), (m, None)))
-            J.setType("aij")
-            J.setPreallocationNNZ((m, 0))
-            J.setUp()
-            J.setValues(range(*J.getOwnershipRange()), range(*J.getOwnershipRangeColumn()),
-                        jac.astype(utils.ScalarType, copy=False))
-            J.assemble()
-            return J
+            n = rows.getLocalSize()
+            indices = np.tile(np.arange(width, dtype=PETSc.IntType), (n, 1))
+            if self.inputs_format == 1:
+                nodes = np.arange(n, dtype=PETSc.IntType) // prod(V.value_shape)
+                indices += (cols.getOwnershipRange()[0] + width * nodes)[:, None]
+            indptr = width * np.arange(n + 1, dtype=PETSc.IntType)
+            data = columns.T.detach().resolve_conj().contiguous().cpu().numpy()
+            return PETSc.Mat().createAIJ((rows.getSizes(), cols.getSizes()),
+                                         csr=(indptr, indices.ravel(), data.ravel()), comm=V.comm)
         # Get the model
         model = self.model
         # Don't unsqueeze so that we end up with a rank 2 tensor
@@ -259,7 +281,7 @@ class PytorchOperator(MLOperator):
             if self._parameters is None:
                 x_P = self._pre_forward_callback(*ops)
             else:
-                x_P = self._network_input(tuple(to_torch(f, batched=False) for f in self._fields))
+                x_P = self._network_input(tuple(map(self._field_values, self._fields)))
 
             # Vectorized forward pass
             y_P = model(x_P)
@@ -268,7 +290,9 @@ class PytorchOperator(MLOperator):
             self.model_output = y_P
 
             # Post forward callback
-            y_F = self._post_forward_callback(y_P if self._parameters is None else y_P.reshape(-1).cpu())
+            if self._parameters is not None:
+                y_P = self._owned_values(y_P, self.function_space()).resolve_conj().cpu()
+            y_F = self._post_forward_callback(y_P)
 
         return y_F
 
@@ -294,8 +318,9 @@ def ml_operator(model, function_space, inputs_format=0):
     A parameter operand makes the dependence on the model's live weights explicit.
     It can appear anywhere among the operands. With explicit weights and
     ``inputs_format=1``, local field values are passed to the model with one
-    row per node and one column per field component. With ``inputs_format=0``,
-    the model receives the concatenated, flattened fields on each rank.
+    row per node and one column per field component. Pointwise fields must
+    share the nodal layout. With ``inputs_format=0``, each rank evaluates the
+    model on the complete flattened fields in PETSc ownership order.
 
     .. code-block:: python
 

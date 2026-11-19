@@ -538,3 +538,29 @@ def test_ml_parameters_multiple_fields() -> None:
     gradient = assemble(action(adjoint(jac), seed))
     torch.testing.assert_close(gradient.tensors[0], torch.tensor([[4, 5]], dtype=dtype))
     torch.testing.assert_close(gradient.tensors[1], torch.ones(1, dtype=dtype))
+
+
+@pytest.mark.skiptorch
+@pytest.mark.parallel(nprocs=[1, 2])
+def test_ml_parameters_global_model() -> None:
+    """A global network couples DoFs across ranks and returns a replicated gradient."""
+    class GlobalSum(Module):
+        def __init__(self):
+            super().__init__()
+            self.scale = torch.nn.Parameter(torch.tensor(2.0, dtype=torch.float64))
+
+        def forward(self, x):
+            return (self.scale * x.sum()).expand_as(x)
+
+    model = GlobalSum()
+    V = FunctionSpace(UnitIntervalMesh(6), "CG", 1)
+    u = Function(V).assign(1)
+    theta = MLParameters(model.parameters())
+    op = ml_operator(model, V)(u, theta)
+    assert np.allclose(assemble(op).dat.data_ro, 2 * V.dim())
+    jac = derivative(op, u)
+    assert np.allclose(assemble(action(assemble(jac), u)).dat.data_ro, 2 * V.dim())
+    seed = assemble(inner(1, TestFunction(V)) * dx)
+    assert np.allclose(assemble(action(adjoint(jac), seed)).dat.data_ro, 2)
+    gradient = assemble(derivative(inner(1, op) * dx, theta))
+    assert gradient.tensors[0].item() == pytest.approx(V.dim())

@@ -2036,7 +2036,7 @@ class _FormHandler:
         """
         spaces = []
         for index, arg in zip(indices, form.arguments()):
-            space = arg.function_space()
+            space = arg.ufl_function_space()
             if index is not None:
                 space = space[index]
             spaces.append(space)
