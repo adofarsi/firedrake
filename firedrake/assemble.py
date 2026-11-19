@@ -107,7 +107,8 @@ def assemble(expr, *args, **kwargs):
     Returns
     -------
     float or firedrake.function.Function or firedrake.cofunction.Cofunction or matrix.MatrixBase
-        Result of assembly.
+        Result of assembly. A linear form in an ML parameter direction can
+        return an `MLParameterGradient` containing the native weight derivatives.
 
     Notes
     -----
@@ -1104,7 +1105,7 @@ class OneFormAssembler(ParloopFormAssembler):
         rank = len(self._form.arguments())
         if rank == 1:
             test, = self._form.arguments()
-            return firedrake.Function(test.function_space().dual())
+            return firedrake.Function(test.ufl_function_space().dual())
         elif rank == 2 and self._diagonal:
             test, _ = self._form.arguments()
             return firedrake.Function(test.function_space().dual())

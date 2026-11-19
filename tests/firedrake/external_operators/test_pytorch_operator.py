@@ -508,3 +508,33 @@ def test_ml_parameters_binding() -> None:
         N(theta, u, theta)
     with pytest.raises(ValueError, match="distinct parameters"):
         N(u, MLParameters(Linear(2, 1).parameters()))
+
+
+@pytest.mark.skiptorch
+@pytest.mark.parallel(nprocs=[1, 2])
+def test_ml_parameters_multiple_fields() -> None:
+    """Select the derivative slot independently of the weight operand's position."""
+    dtype = torch.from_numpy(np.empty((), dtype=ScalarType)).dtype
+    model = Linear(2, 1, dtype=dtype)
+    with torch.no_grad():
+        model.weight.copy_(torch.tensor([[2, 3]], dtype=dtype))
+        model.bias.fill_(1)
+    theta = MLParameters(model.parameters())
+    V = FunctionSpace(UnitIntervalMesh(4), "CG", 1)
+    u, v = Function(V).assign(4), Function(V).assign(5)
+    op = ml_operator(model, V, inputs_format=1)(u, theta, v)
+    assert np.allclose(assemble(op).dat.data_ro, 24)
+
+    du = Function(V).assign(1)
+    seed = assemble(inner(1, TestFunction(V)) * dx)
+    for field, factor in ((u, 2), (v, 3)):
+        jac = derivative(op, field)
+        assert np.allclose(assemble(action(jac, du)).dat.data_ro, factor)
+        assert np.allclose(assemble(action(adjoint(jac), seed)).dat.data_ro, factor * seed.dat.data_ro)
+
+    direction = MLParameters(torch.ones_like(t) for t in theta.tensors)
+    jac = derivative(op, theta)
+    assert np.allclose(assemble(action(jac, direction)).dat.data_ro, 10)
+    gradient = assemble(action(adjoint(jac), seed))
+    torch.testing.assert_close(gradient.tensors[0], torch.tensor([[4, 5]], dtype=dtype))
+    torch.testing.assert_close(gradient.tensors[1], torch.ones(1, dtype=dtype))
