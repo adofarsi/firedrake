@@ -20,6 +20,7 @@ from firedrake.adjoint_utils import annotate_assemble
 from firedrake.ufl_expr import extract_domains
 from firedrake.bcs import DirichletBC, EquationBC, EquationBCSplit
 from firedrake.matrix import MatrixBase, Matrix, ImplicitMatrix
+from firedrake.ml.parameters import MLParameterGradient
 from firedrake.functionspaceimpl import is_mixed
 from firedrake.interpolation import get_interpolator
 from firedrake.pack import pack, modified_lgmaps
@@ -562,7 +563,7 @@ class BaseFormAssembler(AbstractFormAssembler):
             if len(args) != 1:
                 raise TypeError("Not enough operands for Adjoint")
             mat, = args
-            if isinstance(mat, (firedrake.Cofunction, firedrake.Function)):
+            if isinstance(mat, (firedrake.Cofunction, firedrake.Function, MLParameterGradient)):
                 # The operand is the row Action(x, A), which contract assembles as the column A^H x.
                 return tensor.assign(mat) if tensor else mat
             # Out-of-place Hermitian transpose
@@ -604,6 +605,10 @@ class BaseFormAssembler(AbstractFormAssembler):
             if all(isinstance(op, numbers.Complex) for op in args):
                 result = numpy.dot(weights, args)
                 return tensor.assign(result) if tensor else result.item()
+
+            if all(isinstance(op, MLParameterGradient) for op in args):
+                result = MLParameterGradient._linear_combination(weights, args)
+                return tensor.assign(result) if tensor is not None else result
 
             # Accumulate coefficients in a dictionary for each unique Dat/Mat
             terms = defaultdict(PETSc.ScalarType)
@@ -765,14 +770,9 @@ class BaseFormAssembler(AbstractFormAssembler):
         ufl.BaseForm or ufl.core.expr.Expr or slate.TensorBase
             Expression that can be dispatched to an assembler.
         """
-        from tsfc.parameters import is_complex
-
         original_expr = expr
         if not isinstance(expr, slate.TensorBase):
-            scalar_type = parameters.parameters["form_compiler"]["scalar_type"]
-            if form_compiler_parameters is not None:
-                scalar_type = form_compiler_parameters.get("scalar_type", scalar_type)
-            expr = restructure_base_form(expr, complex_mode=is_complex(scalar_type))
+            expr = restructure_base_form(expr)
         # Preprocessing the form makes a new object -> current form caching mechanism
         # will populate `expr`'s cache which is now different than `original_expr`'s cache so we need
         # to transmit the cache. All of this only holds when both are `ufl.Form` objects.

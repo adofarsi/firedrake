@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: FEniCS/ufl
-          ref: fce247503fafaa22a031fd74392680d3c550f967
+          ref: 87f35fdc53bde24f64f0178a134c23bdf43d67f7
           path: ufl-src
       - name: Install pinned sources and PyTorch
         id: install

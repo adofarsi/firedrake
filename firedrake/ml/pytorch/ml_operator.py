@@ -1,5 +1,7 @@
 import os
+from math import prod
 import numpy as np
+from mpi4py import MPI
 try:
     import torch
     import torch.autograd.functional as torch_func
@@ -24,6 +26,7 @@ import petsctools
 from firedrake.external_operators import MLOperator
 from firedrake import utils
 from firedrake.ml.pytorch import to_torch, from_torch
+from firedrake.ml.parameters import MLParameters, MLParameterGradient
 from firedrake.petsc import PETSc
 
 
@@ -69,7 +72,21 @@ class PytorchOperator(MLOperator):
         # If no data type is specified -> default to Firedrake data type (float64 or complex64 in complex mode)
         dtype = operator_data.get("dtype", default_type)
         # Cast model to `dtype`
-        self.model.type(dtype)
+        handles = [op for op in operands if isinstance(op, MLParameters)]
+        if len(handles) > 1:
+            raise ValueError("An ML operator takes at most one MLParameters operand.")
+        self._parameters = next(iter(handles), None)
+        self._fields = tuple(op for op in operands if op is not self._parameters)
+        if self._parameters is None:
+            self.model.type(dtype)
+        else:
+            if not self._fields:
+                raise ValueError("A trainable ML operator requires a field input.")
+            names = {id(p): name for name, p in self.model.named_parameters()}
+            ids = tuple(map(id, self._parameters.tensors))
+            if len(set(ids)) != len(ids) or not set(ids) <= names.keys():
+                raise ValueError("MLParameters must reference distinct parameters of this model.")
+            self._parameter_names = tuple(names[i] for i in ids)
 
     # Stash the output of the neural network for conserving the PyTorch tape
     # -> This enables to only traverse the graph once instead of running multiple
@@ -103,6 +120,41 @@ class PytorchOperator(MLOperator):
         """Callback function to convert the PyTorch output of the ML model to a Firedrake function."""
         return from_torch(y_P, self.ufl_function_space())
 
+    def _network_input(self, values):
+        """Pack local field values for a model with an explicit parameter operand."""
+        if self.inputs_format == 1:
+            values = [v.reshape(-1, prod(field.ufl_shape)) for v, field in zip(values, self._fields, strict=True)]
+            x = torch.cat(values, dim=1)
+        else:
+            x = torch.cat(values)
+        reference = self._parameters.tensors[0]
+        dtype = reference.dtype
+        if x.is_complex() and not reference.is_complex():
+            dtype = torch.promote_types(dtype, torch.complex64)
+        return x.to(device=reference.device, dtype=dtype)
+
+    def _linearization(self):
+        """Vary just the differentiated operand, keeping all other inputs fixed."""
+        operand = self.ufl_operands[self.derivatives.index(1)]
+        values = tuple(to_torch(field, batched=False) for field in self._fields)
+        if operand is self._parameters:
+            x = self._network_input(values)
+
+            def evaluate(*weights):
+                replacements = dict(zip(self._parameter_names, weights, strict=True))
+                return torch.func.functional_call(self.model, replacements, (x,)).reshape(-1)
+
+            return evaluate, self._parameters.tensors
+
+        index = self.derivatives.index(1)
+        index -= sum(isinstance(op, MLParameters) for op in self.ufl_operands[:index])
+
+        def evaluate(value):
+            inputs = (*values[:index], value, *values[index + 1:])
+            return self.model(self._network_input(inputs)).reshape(-1)
+
+        return evaluate, (values[index],)
+
     # -- PyTorch routines for computing AD based quantities via `torch.autograd.functional` -- #
 
     # One could also extend the assembly to hessian, hvp (hessian-vector product) and
@@ -110,6 +162,22 @@ class PytorchOperator(MLOperator):
 
     def _vjp(self, y):
         """Implement the vector-Jacobian product (VJP) for a given vector `y`."""
+        if self._parameters is not None:
+            evaluate, inputs = self._linearization()
+            output, pullback = torch.func.vjp(evaluate, *inputs)
+            seed = to_torch(y, batched=False).to(output)
+            gradients = pullback(seed.reshape_as(output))
+            operand = self.ufl_operands[self.derivatives.index(1)]
+            if operand is self._parameters:
+                # Owned output DoFs supply each rank's share of the replicated weight gradient.
+                blocks = []
+                for gradient in gradients:
+                    local = gradient.detach().resolve_conj().contiguous().cpu().numpy()
+                    total = np.empty_like(local)
+                    self.function_space().comm.Allreduce(local, total, op=MPI.SUM)
+                    blocks.append(torch.from_numpy(total).to(gradient))
+                return MLParameterGradient(operand, tuple(blocks))
+            return from_torch(gradients[0].detach().cpu(), operand.ufl_function_space().dual())
         model = self.model
         x = self._pre_forward_callback(*self.ufl_operands)
         y_P = self._pre_forward_callback(y)
@@ -119,6 +187,11 @@ class PytorchOperator(MLOperator):
 
     def _jvp(self, z):
         """Implement the Jacobian-vector product (JVP) for a given vector `z`."""
+        if self._parameters is not None:
+            evaluate, inputs = self._linearization()
+            tangent = z.tensors if isinstance(z, MLParameters) else (to_torch(z, batched=False),)
+            _, jvp = torch.func.jvp(evaluate, inputs, tangent)
+            return from_torch(jvp.detach().cpu(), self.function_space())
         model = self.model
         x = self._pre_forward_callback(*self.ufl_operands)
         z_P = self._pre_forward_callback(z)
@@ -128,6 +201,32 @@ class PytorchOperator(MLOperator):
 
     def _jac(self):
         """Compute the Jacobian of the PyTorch model."""
+        if self._parameters is not None:
+            operand = self.ufl_operands[self.derivatives.index(1)]
+            if operand is self._parameters:
+                raise NotImplementedError("Apply the weight Jacobian or its adjoint to a direction.")
+            evaluate, (x,) = self._linearization()
+            # Each owned input block maps to the owned output block on the same rank.
+            def push(direction):
+                return torch.func.jvp(evaluate, (x,), (direction,))[1]
+
+            directions = torch.eye(x.numel(), dtype=x.dtype, device=x.device)
+            if x.numel():
+                columns = torch.vmap(push)(directions)
+                if x.is_complex() and not torch.allclose(torch.vmap(push)(1j * directions), 1j * columns):
+                    raise ValueError("A complex PETSc Jacobian requires a complex-linear derivative.")
+                jac = columns.T.detach().cpu().numpy()
+            else:
+                jac = np.empty((evaluate(x).numel(), 0), dtype=utils.ScalarType)
+            n, m = jac.shape
+            J = PETSc.Mat().create(comm=self.function_space().comm)
+            J.setSizes(((n, None), (m, None)))
+            J.setType("aij")
+            J.setPreallocationNNZ((m, 0))
+            J.setUp()
+            J.setValues(range(*J.getOwnershipRange()), range(*J.getOwnershipRangeColumn()), jac.astype(utils.ScalarType, copy=False))
+            J.assemble()
+            return J
         # Get the model
         model = self.model
         # Don't unsqueeze so that we end up with a rank 2 tensor
@@ -156,7 +255,10 @@ class PytorchOperator(MLOperator):
         # By default PyTorch annotation is on (i.e. equivalent to `with torch.enable_grad()`)
         with torch.set_grad_enabled(self.torch_grad_enabled):
             # Pre forward callback
-            x_P = self._pre_forward_callback(*ops)
+            if self._parameters is None:
+                x_P = self._pre_forward_callback(*ops)
+            else:
+                x_P = self._network_input(tuple(to_torch(f, batched=False) for f in self._fields))
 
             # Vectorized forward pass
             y_P = model(x_P)
@@ -165,7 +267,7 @@ class PytorchOperator(MLOperator):
             self.model_output = y_P
 
             # Post forward callback
-            y_F = self._post_forward_callback(y_P)
+            y_F = self._post_forward_callback(y_P if self._parameters is None else y_P.reshape(-1).cpu())
 
         return y_F
 
