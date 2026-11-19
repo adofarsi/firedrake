@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Self
 
 import ufl
-from ufl.cell import AbstractCell
 
 if TYPE_CHECKING:
     import torch
@@ -15,9 +14,9 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class _ParameterElement(ufl.AbstractFiniteElement):
-    """Describe a spatially constant vector by its shape."""
+    """Describe a parameter vector on the reference point by its shape."""
 
-    cell: AbstractCell = field()
+    cell = ufl.vertex
     reference_value_shape: tuple[int, ...] = field()
     sobolev_space = ufl.HInf
     pullback = ufl.identity_pullback
@@ -37,14 +36,12 @@ class MLParameters(ufl.Coefficient):
         Tensors to reference, normally ``model.parameters()``. Their order and
         shapes define the parameter vector and must remain fixed. All tensors
         must have floating-point or complex values.
-    mesh : ufl.Mesh
-        Mesh of the PDE that uses these parameters. The parameter vector is
-        spatially constant on this mesh.
 
     Notes
     -----
     Construction retains the supplied tensors and their PyTorch storage.
-    UFL records their total size and the mesh of the external operator.
+    UFL records their total size. Operators on different meshes can share
+    the same parameter vector.
     Each MPI rank retains its own model parameters.
 
     Create the handle after moving the model to its intended dtype and device.
@@ -54,10 +51,9 @@ class MLParameters(ufl.Coefficient):
     Examples
     --------
     >>> import torch
-    >>> from firedrake import UnitIntervalMesh
-    >>> mesh = UnitIntervalMesh(2)
+    >>> from firedrake.ml.pytorch import MLParameters
     >>> model = torch.nn.Linear(2, 1)
-    >>> parameters = MLParameters(model.parameters(), mesh=mesh)
+    >>> parameters = MLParameters(model.parameters())
     >>> saved_parameters = parameters.copy()
     >>> _ = parameters.assign(saved_parameters)
     """
@@ -66,7 +62,7 @@ class MLParameters(ufl.Coefficient):
         # A parameter block is always a primal coefficient.
         return object.__new__(cls)
 
-    def __init__(self, parameters: Iterable[torch.Tensor], *, mesh: ufl.Mesh) -> None:
+    def __init__(self, parameters: Iterable[torch.Tensor]) -> None:
         import torch
 
         self._tensors = tuple(parameters)
@@ -77,8 +73,8 @@ class MLParameters(ufl.Coefficient):
         size = sum(t.numel() for t in self._tensors)
         if size == 0:
             raise ValueError("A parameter vector must contain at least one scalar.")
-        element = _ParameterElement(mesh.ufl_cell(), (size,))
-        super().__init__(ufl.FunctionSpace(mesh, element))
+        element = _ParameterElement((size,))
+        super().__init__(ufl.FunctionSpace(None, element))
 
     @property
     def tensors(self) -> tuple[torch.Tensor, ...]:
@@ -99,7 +95,7 @@ class MLParameters(ufl.Coefficient):
         MLParameters
             Independent tensors with the same shapes, dtypes and devices.
         """
-        return type(self)((t.detach().clone() for t in self._tensors), mesh=self.ufl_domain())
+        return type(self)(t.detach().clone() for t in self._tensors)
 
     def assign(self, other: "MLParameters") -> "MLParameters":
         """Copy values while preserving the original tensors and their storage.

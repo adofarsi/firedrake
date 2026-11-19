@@ -225,8 +225,8 @@ def derivative(form, u, du=None, coefficient_derivatives=None):
     Returns
     -------
     ufl.form.BaseForm or ufl.core.expr.Expr
-        The symbolic derivative. The direction for an ML parameter belongs to its global
-        vector space on the PDE mesh.
+        The symbolic derivative. The direction for an ML parameter belongs to
+        its mesh-independent parameter space.
 
     Raises
     ------

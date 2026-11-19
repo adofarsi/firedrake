@@ -7,6 +7,7 @@ from ufl.algorithms.restructure_base_form import restructure_base_form
 from ufl.core.external_operator import ExternalOperator
 
 from firedrake import *
+from firedrake.utils import ScalarType
 
 
 @pytest.fixture
@@ -317,13 +318,12 @@ def test_ml_parameters_storage_and_snapshots(complex_parameters: bool) -> None:
     """Keep model and optimiser references valid when restoring parameter values."""
     dtype = torch.complex128 if complex_parameters else torch.float64
     model = Linear(2, 1).to(dtype=dtype)
-    mesh = UnitIntervalMesh(2)
-    parameters = MLParameters(parameters=model.parameters(), mesh=mesh)
+    parameters = MLParameters(model.parameters())
     tensors = tuple(model.parameters())
     pointers = tuple(t.data_ptr() for t in tensors)
     assert all(t is p for t, p in zip(parameters.tensors, tensors))
     assert parameters.ufl_shape == (3,)
-    assert parameters.ufl_domains() == (mesh,)
+    assert parameters.ufl_domains() == ()
 
     saved = parameters.copy()
     assert all(not t.requires_grad for t in saved.tensors)
@@ -350,7 +350,7 @@ def test_ml_parameters_symbolic_derivative(size: int, interpolated: bool) -> Non
     mesh = UnitIntervalMesh(2)
     V = FunctionSpace(mesh, "CG", 1)
     u = Function(V)
-    parameters = MLParameters([torch.nn.Parameter(torch.ones(size))], mesh=mesh)
+    parameters = MLParameters([torch.nn.Parameter(torch.ones(size))])
     operand = interpolate(u, V) if interpolated else u
     N = ExternalOperator(operand, parameters, function_space=V)
     linearization = expand_derivatives(derivative(N, parameters))
@@ -364,7 +364,7 @@ def test_ml_parameters_symbolic_derivative(size: int, interpolated: bool) -> Non
     assert argument.number() == 0
     assert argument.ufl_function_space() == parameters.ufl_function_space()
     assert parameters.ufl_shape == (size,)
-    assert parameters.ufl_domains() == (mesh,)
+    assert parameters.ufl_domains() == ()
 
     saved = parameters.copy()
     direction = linearization.arguments()[-1]
@@ -381,18 +381,25 @@ def test_ml_parameters_symbolic_derivative(size: int, interpolated: bool) -> Non
 @pytest.mark.skiptorch
 @pytest.mark.parallel(nprocs=[1, 2])
 def test_ml_parameters_on_two_meshes() -> None:
-    """Share native tensors between two mesh-specific parameter symbols."""
-    model = Linear(2, 1)
-    first = MLParameters(model.parameters(), mesh=UnitIntervalMesh(2))
-    second = MLParameters(model.parameters(), mesh=UnitIntervalMesh(3))
-    assert first.ufl_function_space() != second.ufl_function_space()
-    assert all(a is b for a, b in zip(first.tensors, second.tensors, strict=True))
-    for parameters in (first, second):
-        mesh = parameters.ufl_domain()
-        V = FunctionSpace(mesh, "CG", 1)
-        N = ExternalOperator(Function(V), parameters, function_space=V)
-        form = inner(N, TestFunction(V)) * dx
-        assert form.domain_numbering() == {mesh: 0}
+    """Differentiate residuals on two meshes with respect to the same weights."""
+    dtype = torch.from_numpy(np.empty((), dtype=ScalarType)).dtype
+    model = Linear(1, 1, dtype=dtype)
+    theta = MLParameters(model.parameters())
+    spaces = (FunctionSpace(UnitIntervalMesh(2), "CG", 1),
+              FunctionSpace(UnitSquareMesh(2, 2), "DG", 0))
+    states = tuple(Function(V) for V in spaces)
+    contributions = []
+    for u in states:
+        V = u.function_space()
+        N = ml_operator(model, V, inputs_format=1)
+        residual = inner(N(u, theta), TestFunction(V)) * dx
+        assert residual.domain_numbering() == {V.mesh(): 0}
+        contributions.append(restructure_base_form(action(adjoint(derivative(residual, theta)), u)))
+
+    total = sum(contributions)
+    direction, = total.arguments()
+    assert direction.ufl_function_space() == theta.ufl_function_space()
+    assert set(total.coefficients()) == {theta, *states}
 
 
 @pytest.mark.skiptorch
@@ -400,8 +407,7 @@ def test_ml_parameters_on_two_meshes() -> None:
 @pytest.mark.parametrize("mismatch", ["shape", "dtype", "count"])
 def test_ml_parameters_assign_mismatch(mismatch: str) -> None:
     """Reject incompatible snapshots before modifying any parameter."""
-    mesh = UnitIntervalMesh(1)
-    parameters = MLParameters([torch.ones(2), torch.ones(3)], mesh=mesh)
+    parameters = MLParameters([torch.ones(2), torch.ones(3)])
     replacement = [torch.full((2,), 9.0), torch.zeros(3)]
     if mismatch == "shape":
         replacement[1] = torch.zeros(4)
@@ -410,7 +416,7 @@ def test_ml_parameters_assign_mismatch(mismatch: str) -> None:
     else:
         replacement.pop()
     with pytest.raises(ValueError, match="matching shapes, dtypes and devices"):
-        parameters.assign(MLParameters(replacement, mesh=mesh))
+        parameters.assign(MLParameters(replacement))
     for tensor in parameters.tensors:
         torch.testing.assert_close(tensor, torch.ones_like(tensor))
 
@@ -427,4 +433,4 @@ def test_ml_parameters_invalid_values(invalid: str) -> None:
     else:
         values, error = [torch.ones(2, dtype=torch.int64)], TypeError
     with pytest.raises(error):
-        MLParameters(values, mesh=UnitIntervalMesh(1))
+        MLParameters(values)
