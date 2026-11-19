@@ -287,10 +287,7 @@ class PytorchOperator(MLOperator):
         # By default PyTorch annotation is on (i.e. equivalent to `with torch.enable_grad()`)
         with torch.set_grad_enabled(self.torch_grad_enabled):
             # Pre forward callback
-            if self._parameters is None:
-                x_P = self._pre_forward_callback(*ops)
-            else:
-                x_P = self._network_input(tuple(map(self._field_values, self._fields)))
+            x_P = self._pre_forward_callback(*ops)
 
             # Vectorized forward pass
             y_P = model(x_P)
@@ -299,8 +296,6 @@ class PytorchOperator(MLOperator):
             self.model_output = y_P
 
             # Post forward callback
-            if self._parameters is not None:
-                y_P = self._owned_values(y_P, self.function_space()).resolve_conj().cpu()
             y_F = self._post_forward_callback(y_P)
 
         return y_F
