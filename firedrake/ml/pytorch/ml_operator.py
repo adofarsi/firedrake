@@ -147,7 +147,8 @@ class PytorchOperator(MLOperator):
 
     def _linearization(self):
         """Vary just the differentiated operand, keeping all other inputs fixed."""
-        operand = self.ufl_operands[self.derivatives.index(1)]
+        slot = self.derivatives.index(1)
+        operand = self.ufl_operands[slot]
         values = tuple(map(self._field_values, self._fields))
         if operand is self._parameters:
             x = self._network_input(values)
@@ -158,7 +159,7 @@ class PytorchOperator(MLOperator):
 
             return evaluate, self._parameters.tensors
 
-        index = sum(op is not self._parameters for op in self.ufl_operands[:self.derivatives.index(1)])
+        index = sum(op is not self._parameters for op in self.ufl_operands[:slot])
 
         def evaluate(value):
             inputs = (*values[:index], value, *values[index + 1:])
@@ -272,6 +273,14 @@ class PytorchOperator(MLOperator):
         """Perform the forward pass through the PyTorch model."""
         model = self.model
 
+        if self._parameters is not None:
+            # Each derivative evaluates the model at the current parameter values.
+            with torch.no_grad():
+                values = tuple(map(self._field_values, self._fields))
+                output = model(self._network_input(values))
+                owned = self._owned_values(output, self.function_space())
+                return self._post_forward_callback(owned.resolve_conj().cpu())
+
         # Get the input operands
         ops = self.ufl_operands
 
@@ -331,6 +340,11 @@ def ml_operator(model, function_space, inputs_format=0):
         gradient = assemble(derivative(loss, theta))
         torch.autograd.backward(theta.tensors, gradient.tensors)
         optimizer.step()
+
+    The parameter operand can contain an ordered subset of the model's weights.
+    For a partially frozen model, use the parameters with ``requires_grad=True``.
+    Derivatives evaluate the model again. Use deterministic evaluation (for
+    example, ``model.eval()`` for modules with dropout or batch normalization).
 
     The assembled gradient contains one tensor per weight, summed over the
     mesh communicator. Ranks must start with the same model parameters and
