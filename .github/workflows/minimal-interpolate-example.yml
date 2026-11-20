@@ -1,4 +1,4 @@
-name: Verify minimal interpolation example
+name: Verify nested interpolation adjoints
 
 on:
   push:
@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 093a12137aae649b5aae9c30b8d73f4749437284
+          ref: b4a34e6a278ebcf2710b86cb58fd4425a78d93f4
           fetch-depth: 2
           path: firedrake-repo
       - uses: actions/checkout@v7
@@ -59,76 +59,56 @@ jobs:
           git -C firedrake-repo rev-parse HEAD > results/firedrake-sha.txt
           git -C ufl-src rev-parse HEAD > results/ufl-sha.txt
           git -C fiat-src rev-parse HEAD > results/fiat-sha.txt
-      - name: Compare the scalar operator adjoint on unmodified main
+      - name: Reproduce the new regression on the unmodified base
         working-directory: firedrake-repo
         run: |
-          base=4341a176cd3b926cd9bb8029f9f12316fe3a96b0
-          git show "$base":firedrake/interpolation.py > firedrake/interpolation.py
-          trap 'git restore firedrake/interpolation.py' EXIT
-          git diff --exit-code "$base" -- . ':!tests/firedrake/regression/test_interpolate.py'
+          base=76e00a7b2df6319f390126de75043d47dea6119f
+          test "$(git rev-parse HEAD^)" = "$base"
+          git show "$base":firedrake/assemble.py > firedrake/assemble.py
+          trap 'git restore -- firedrake/assemble.py' EXIT
+          git diff --exit-code "$base" -- . ':(exclude)tests/firedrake/regression/test_interp_dual.py'
           status=0
-          FIREDRAKE_CACHE_DIR=/tmp/base-n1 timeout -k 10s 120s mpiexec --oversubscribe -n 1 /tmp/example-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' -k 'scalar_scalar and operator' tests/firedrake/regression/test_interpolate.py::test_interpolate_base_form_output --junitxml=../results/base-n1.xml > ../results/base-n1.log 2>&1 || status=$?
-          test "$status" -le 1
+          FIREDRAKE_CACHE_DIR=/tmp/base-n1 timeout -k 10s 180s mpiexec --oversubscribe -n 1 /tmp/example-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_interp_dual.py::test_nested_interp_adjoint --junitxml=../results/base-n1.xml > ../results/base-n1.log 2>&1 || status=$?
           cat ../results/base-n1.log
-      - name: Test whether keeping the interpolation dual slot fixes adjoint assembly
+          test "$status" -eq 1
+          python3 - <<'PYTEST'
+          from xml.etree import ElementTree as ET
+          suite = ET.parse('../results/base-n1.xml').getroot().find('testsuite')
+          assert suite.get('tests') == suite.get('failures') == '1'
+          failure = suite.find('testcase/failure').text
+          assert 'base_form_assembly_visitor' in failure and 'not enough values to unpack' in failure, failure
+          PYTEST
+      - name: Check the standalone fix at one and two ranks
+        if: always() && steps.install.outcome == 'success'
         working-directory: firedrake-repo
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path("firedrake/assemble.py")
-          source = path.read_text()
-          old = "domains = set(extract_domains(expr.argument_slots()[0])) if isinstance(expr, ufl.Interpolate) else set()"
-          new = "dual_slot = expr.argument_slots()[0] if isinstance(expr, ufl.Interpolate) else None\n            domains = set(extract_domains(dual_slot)) if dual_slot is not None else set()"
-          check = "if isinstance(e, ufl.form.BaseForm) and not _can_fuse_operator(e, domains))"
-          assert source.count(old) == source.count(check) == 1
-          path.write_text(source.replace(old, new).replace(check, "if isinstance(e, ufl.form.BaseForm) and (e is dual_slot or not _can_fuse_operator(e, domains)))"))
-          PY
-          git diff -- firedrake/assemble.py > ../results/diagnostic.patch
-      - name: Run the BaseForm interpolation regression with the diagnostic change
-        working-directory: firedrake-repo
-        run: |
+          git diff --exit-code HEAD
           result=0
           for ranks in 1 2; do
-            FIREDRAKE_CACHE_DIR=/tmp/regression-n${ranks} timeout -k 10s 240s mpiexec --oversubscribe -n "$ranks" /tmp/example-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_interpolate.py::test_interpolate_base_form_output --junitxml=../results/tests-n${ranks}.xml 2>&1 | tee ../results/tests-n${ranks}.log || result=1
+            FIREDRAKE_CACHE_DIR=/tmp/standalone-n${ranks} timeout -k 10s 180s mpiexec --oversubscribe -n "$ranks" /tmp/example-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_interp_dual.py::test_nested_interp_adjoint --junitxml=../results/standalone-n${ranks}.xml 2>&1 | tee ../results/standalone-n${ranks}.log || result=1
           done
           exit "$result"
-      - name: Check existing interpolation fusion cases with the diagnostic change
+      - name: Check interpolation fusion, base forms and external operators
         if: always() && steps.install.outcome == 'success'
         working-directory: firedrake-repo
         run: |
           /tmp/example-venv/bin/python -m pytest -q --tb=short tests/firedrake/regression/test_interp_dual.py -m 'not parallel' -k 'partial_fusion or nested' --junitxml=../results/fusion.xml 2>&1 | tee ../results/fusion.log
-      - name: Run the self-contained example
+          timeout -k 10s 360s /tmp/example-venv/bin/python -m pytest -q --tb=short -m 'not parallel' tests/firedrake/regression/test_assemble_baseform.py tests/firedrake/external_operators/test_abstract_external_operator.py tests/firedrake/external_operators/test_external_operators.py::test_assemble --junitxml=../results/assembly.xml 2>&1 | tee ../results/assembly.log
+      - name: Check the new fix together with the separate patch from PR 5664
         if: always() && steps.install.outcome == 'success'
+        working-directory: firedrake-repo
         run: |
-          cat > results/example.py <<'PY'
-          from firedrake import *
-
-          mesh = UnitIntervalMesh(4)
-          V = VectorFunctionSpace(mesh, "CG", 1, dim=2)
-          Q = FunctionSpace(mesh, "CG", 1)
-          D = FunctionSpace(mesh, "DG", 0)
-          x, = SpatialCoordinate(mesh)
-
-          # Build a linear map that sums the two vector components.
-          u = TrialFunction(V)
-          A = assemble(interpolate(u[0] + u[1], Q))
-
-          # Interpolate the map's scalar output into a DG0 space.
-          transfer = interpolate(A, D)
-
-          f = Function(V).interpolate(as_vector((1 + x, 2 - x)))
-          result = assemble(action(transfer, f))
-          expected = Function(D).assign(3)
-          error = norm(assemble(result - expected))
-          assert error < 1e-12
-          if mesh.comm.rank == 0:
-              print(f"Scalar result is 3 everywhere. L2 error = {error:.2e}")
-          PY
+          pr5664=093a12137aae649b5aae9c30b8d73f4749437284
+          git fetch --no-tags --depth=2 origin "$pr5664"
+          git diff --binary "$pr5664^2" "$pr5664" | git apply
+          git diff --stat HEAD
+          result=0
           for ranks in 1 2; do
-            timeout -k 10s 120s mpiexec --oversubscribe -n "$ranks" /tmp/example-venv/bin/python results/example.py 2>&1 | tee results/example-n${ranks}.log
+            FIREDRAKE_CACHE_DIR=/tmp/combined-n${ranks} timeout -k 10s 240s mpiexec --oversubscribe -n "$ranks" /tmp/example-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_interpolate.py::test_interpolate_base_form_output --junitxml=../results/combined-n${ranks}.xml 2>&1 | tee ../results/combined-n${ranks}.log || result=1
           done
+          exit "$result"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: minimal-interpolation-example-${{ matrix.variant }}
+          name: interpolation-dual-slot-${{ matrix.variant }}
           path: results
