@@ -11,8 +11,16 @@ jobs:
   example:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: real
+            image: firedrakeproject/firedrake-vanilla-default@sha256:6b1a7eaebe1013d2eb0abbb71cb872cbf1c3f3c5c480b272a48ac130be470b1e
+          - variant: complex
+            image: firedrakeproject/firedrake-vanilla-complex@sha256:6c1e0921835995095fff7de9328004071f4c9d053276666bcc5e5652be5cc1df
     container:
-      image: firedrakeproject/firedrake-vanilla-default@sha256:6b1a7eaebe1013d2eb0abbb71cb872cbf1c3f3c5c480b272a48ac130be470b1e
+      image: ${{ matrix.image }}
       options: --cpus 2 --memory 4g
     env:
       OMP_NUM_THREADS: 1
@@ -26,22 +34,40 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ca4e74116bad3706f8f0d853b0167645954bd3ba
+          ref: 093a12137aae649b5aae9c30b8d73f4749437284
           path: firedrake-repo
       - uses: actions/checkout@v7
         with:
           repository: FEniCS/ufl
-          ref: a001fce09da7fd6f4339d339eea62a69428317cb
+          ref: f4183ef2d0d1d66d681c1647dcf08685aee8abc2
           path: ufl-src
+      - uses: actions/checkout@v7
+        with:
+          repository: firedrakeproject/fiat
+          ref: 91b20b48fd6bae52935b22c1d56cc28c986a1ead
+          path: fiat-src
       - name: Install the pinned sources
+        id: install
         run: |
           python3 -m venv --system-site-packages /tmp/example-venv
           /tmp/example-venv/bin/python -m pip install --no-deps --no-build-isolation -e ./ufl-src
+          /tmp/example-venv/bin/python -m pip install --no-deps --no-build-isolation --config-settings editable_mode=compat -e ./fiat-src
           /tmp/example-venv/bin/python -m pip install --no-deps --no-build-isolation --config-settings editable_mode=compat -e ./firedrake-repo
+          /tmp/example-venv/bin/python -m pip install 'mpi-pytest>=2026.0' pytest
           mkdir -p results
           git -C firedrake-repo rev-parse HEAD > results/firedrake-sha.txt
           git -C ufl-src rev-parse HEAD > results/ufl-sha.txt
+          git -C fiat-src rev-parse HEAD > results/fiat-sha.txt
+      - name: Run the BaseForm interpolation regression
+        working-directory: firedrake-repo
+        run: |
+          result=0
+          for ranks in 1 2; do
+            FIREDRAKE_CACHE_DIR=/tmp/regression-n${ranks} timeout -k 10s 240s mpiexec --oversubscribe -n "$ranks" /tmp/example-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_interpolate.py::test_interpolate_base_form_output --junitxml=../results/tests-n${ranks}.xml 2>&1 | tee ../results/tests-n${ranks}.log || result=1
+          done
+          exit "$result"
       - name: Run the self-contained example
+        if: always() && steps.install.outcome == 'success'
         run: |
           cat > results/example.py <<'PY'
           from firedrake import *
@@ -73,5 +99,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: minimal-interpolation-example
+          name: minimal-interpolation-example-${{ matrix.variant }}
           path: results
