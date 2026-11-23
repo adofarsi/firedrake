@@ -1,4 +1,4 @@
-name: Verify UFL field arguments during Firedrake parameter training
+name: Validate native parameter training with merged UFL 569
 
 on:
   push:
@@ -39,8 +39,8 @@ jobs:
           path: firedrake-repo
       - uses: actions/checkout@v7
         with:
-          repository: adofarsi/ufl
-          ref: 98295d7aa2f2ab53be562d5261a0ce9a494c8c14
+          repository: FEniCS/ufl
+          ref: bf8a47b9b49f58a94085e2727ac2c711a2594a4b
           fetch-depth: 2
           path: ufl-src
       - uses: actions/checkout@v7
@@ -48,6 +48,11 @@ jobs:
           repository: firedrakeproject/fiat
           ref: 91b20b48fd6bae52935b22c1d56cc28c986a1ead
           path: fiat-src
+      - uses: actions/checkout@v7
+        if: matrix.variant == 'real'
+        with:
+          sparse-checkout: .github/validation
+          path: validation-src
       - name: Install pinned sources and PyTorch
         id: install
         run: |
@@ -76,7 +81,7 @@ jobs:
           Path('results/environment.json').write_text(json.dumps(report, indent=2))
           print(report)
           PY
-      - name: Check the two Firedrake reversions and reproduce the failure on UFL main
+      - name: Check the two Firedrake reversions and reproduce the failure before UFL 569
         if: steps.install.outcome == 'success'
         run: |
           fd_base=1da5eb7a97b331427565f55bcfe55c0cb5d296f6
@@ -113,10 +118,11 @@ jobs:
           assert error is not None and "Argument' object has no attribute 'function_space'" in error.text, tests[0].attrib
           PYCODE
           done
-      - name: Verify the patched source for the integration runs
+      - name: Verify the merged UFL and Firedrake source for the integration runs
         if: always() && steps.install.outcome == 'success'
         run: |
-          test "$(git -C ufl-src rev-parse HEAD)" = 98295d7aa2f2ab53be562d5261a0ce9a494c8c14
+          test "$(git -C ufl-src rev-parse HEAD)" = bf8a47b9b49f58a94085e2727ac2c711a2594a4b
+          test "$(git -C firedrake-repo rev-parse HEAD)" = d25faa8ec92f0f97fbe9c7ebfce82711ab1d7c2c
           git -C ufl-src diff --exit-code HEAD
           git -C firedrake-repo diff --exit-code HEAD
       - name: Source lint
@@ -138,6 +144,12 @@ jobs:
         run: |
           cd firedrake-repo
           timeout -k 10s 180s mpiexec --oversubscribe -n 2 /tmp/parameters-venv/bin/python -m pytest -v --tb=short -m 'parallel[match]' tests/firedrake/external_operators/test_pytorch_operator.py -k ml_parameters --junitxml=../results/parameters-n2.xml 2>&1 | tee ../results/parameters-n2.log
+      - name: Train one shared model on unequal MPI groups
+        if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/parameters-split-n3
+        run: |
+          timeout -k 10s 180s mpiexec --oversubscribe -n 3 /tmp/parameters-venv/bin/python validation-src/.github/validation/train_two_meshes.py 2>&1 | tee results/split-n3.log
       - name: Existing ML interfaces and coefficient differentiation
         if: always() && steps.install.outcome == 'success'
         env:
