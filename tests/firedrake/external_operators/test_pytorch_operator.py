@@ -620,7 +620,7 @@ def test_ml_parameters_complex_directions() -> None:
     V = FunctionSpace(UnitIntervalMesh(4), "CG", 1)
     u = Function(V).assign(1)
     N = ml_operator(model, V, inputs_format="pointwise")(u, theta)
-    J = inner(N, 1) * dx
+    J = inner(1, N) * dx
     g = assemble(derivative(J, theta))
     before = g.dat.data_ro.copy()
     theta.backward(g)
