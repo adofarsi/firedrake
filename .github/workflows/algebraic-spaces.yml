@@ -16,9 +16,9 @@ jobs:
       matrix:
         include:
           - variant: real
-            image: firedrakeproject/firedrake-vanilla-default@sha256:6b1a7eaebe1013d2eb0abbb71cb872cbf1c3f3c5c480b272a48ac130be470b1e
+            image: firedrakeproject/firedrake-vanilla-default@sha256:f1b31471d540f915bd53efb92224306967fa6ec93c6ce37c727c43e02d53aac0
           - variant: complex
-            image: firedrakeproject/firedrake-vanilla-complex@sha256:6c1e0921835995095fff7de9328004071f4c9d053276666bcc5e5652be5cc1df
+            image: firedrakeproject/firedrake-vanilla-complex@sha256:ff2a7711ce81d269e53d0d777f162211015b501205dabee79090c1d045547621
     container:
       image: ${{ matrix.image }}
       options: --cpus 2 --memory 6g
