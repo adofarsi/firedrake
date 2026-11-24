@@ -69,16 +69,18 @@ def main() -> None:
     J = 0.5 * fd.inner(prediction, prediction) * fd.dx
 
     mesh_loss = fd.assemble(J).real
-    mesh_gradient = fd.assemble(fd.derivative(J, theta)).tensors
-    loss, gradient = sum_losses_across_rank_groups(
-        mesh_loss, mesh_gradient, mesh_comm, training_comm
+    gradient = fd.assemble(fd.derivative(J, theta))
+    loss, totals = sum_losses_across_rank_groups(
+        mesh_loss, gradient.tensors, mesh_comm, training_comm
     )
+    for block, total in zip(gradient.tensors, totals, strict=True):
+        block.copy_(total)
 
     optimizer.zero_grad(set_to_none=True)
-    torch.autograd.backward(theta.tensors, gradient)
+    theta.backward(gradient)
     optimizer.step()
 
-    dw, db = gradient
+    dw, db = gradient.tensors
     np.testing.assert_allclose((loss, dw.item(), db.item()), (2.5, 5.0, 3.0))
     np.testing.assert_allclose((model.weight.item(), model.bias.item()), (0.5, -0.3))
     if training_comm.rank == 0:

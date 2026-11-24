@@ -1,4 +1,4 @@
-name: Validate native parameter training with merged UFL 569
+name: Validate MLParameters.backward on shared and disjoint rank groups
 
 on:
   push:
@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: d25faa8ec92f0f97fbe9c7ebfce82711ab1d7c2c
+          ref: 2121cc4b7d7b3e9d6ac446aade9449d69197940b
           fetch-depth: 2
           path: firedrake-repo
       - uses: actions/checkout@v7
@@ -81,48 +81,11 @@ jobs:
           Path('results/environment.json').write_text(json.dumps(report, indent=2))
           print(report)
           PY
-      - name: Check the two Firedrake reversions and reproduce the failure before UFL 569
-        if: steps.install.outcome == 'success'
-        run: |
-          fd_base=1da5eb7a97b331427565f55bcfe55c0cb5d296f6
-          test "$(git -C firedrake-repo rev-parse HEAD^)" = "$fd_base"
-          test "$(git -C firedrake-repo diff --name-only "$fd_base" HEAD)" = firedrake/assemble.py
-          git -C firedrake-repo diff --unified=0 "$fd_base" HEAD > results/firedrake-diff.txt
-          python3 - <<'PYCODE'
-          from pathlib import Path
-          changed = [l for l in Path('results/firedrake-diff.txt').read_text().splitlines() if l.startswith(('+', '-')) and not l.startswith(('+++','---'))]
-          assert len(changed) == 4, changed
-          assert all(old[1:].replace('.ufl_function_space()', '.function_space()') == new[1:]
-                     and old[0] == '-' and new[0] == '+'
-                     and old.count('.ufl_function_space()') == 1
-                     for old, new in zip(changed[::2], changed[1::2])), changed
-          PYCODE
-          ufl_sha=$(git -C ufl-src rev-parse HEAD)
-          base=$(git -C ufl-src rev-parse HEAD^)
-          test "$base" = f4183ef2d0d1d66d681c1647dcf08685aee8abc2
-          git -C ufl-src switch --quiet --detach "$base"
-          trap 'git -C ufl-src switch --quiet --detach "$ufl_sha"' EXIT
-          echo "$base" > results/ufl-baseline-sha.txt
-          for ranks in 1 2; do
-            rc=0
-            (cd firedrake-repo && FIREDRAKE_CACHE_DIR=/tmp/baseline-n${ranks} timeout -k 10s 180s mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -v --tb=short -m 'parallel[match]' tests/firedrake/external_operators/test_pytorch_operator.py::test_ml_parameters_training_step --junitxml=../results/base-n${ranks}.xml) > results/base-n${ranks}.log 2>&1 || rc=$?
-            cat results/base-n${ranks}.log
-            test "$rc" -eq 1
-            python3 - "$ranks" <<'PYCODE'
-          from xml.etree import ElementTree as ET
-          import sys
-          report = ET.parse('results/base-n' + sys.argv[1] + '.xml')
-          tests = report.findall('.//testcase')
-          assert len(tests) == 1
-          error = tests[0].find('failure')
-          assert error is not None and "Argument' object has no attribute 'function_space'" in error.text, tests[0].attrib
-          PYCODE
-          done
       - name: Verify the merged UFL and Firedrake source for the integration runs
         if: always() && steps.install.outcome == 'success'
         run: |
           test "$(git -C ufl-src rev-parse HEAD)" = bf8a47b9b49f58a94085e2727ac2c711a2594a4b
-          test "$(git -C firedrake-repo rev-parse HEAD)" = d25faa8ec92f0f97fbe9c7ebfce82711ab1d7c2c
+          test "$(git -C firedrake-repo rev-parse HEAD)" = 2121cc4b7d7b3e9d6ac446aade9449d69197940b
           git -C ufl-src diff --exit-code HEAD
           git -C firedrake-repo diff --exit-code HEAD
       - name: Source lint
@@ -144,6 +107,14 @@ jobs:
         run: |
           cd firedrake-repo
           timeout -k 10s 180s mpiexec --oversubscribe -n 2 /tmp/parameters-venv/bin/python -m pytest -v --tb=short -m 'parallel[match]' tests/firedrake/external_operators/test_pytorch_operator.py -k ml_parameters --junitxml=../results/parameters-n2.xml 2>&1 | tee ../results/parameters-n2.log
+      - name: Train on an interval and a square for ten optimizer steps
+        if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
+        env:
+          FIREDRAKE_CACHE_DIR: /tmp/parameters-training-loop
+        run: |
+          for ranks in 1 2; do
+            timeout -k 10s 180s mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python validation-src/.github/validation/train_on_shared_ranks.py 2>&1 | tee "results/training-loop-n${ranks}.log"
+          done
       - name: Train one shared model on unequal MPI groups
         if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
         env:
