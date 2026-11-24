@@ -1,0 +1,89 @@
+name: Validate algebraic assembly
+
+on:
+  push:
+    branches: [codex/validate-algebraic-spaces]
+
+permissions:
+  contents: read
+
+jobs:
+  parameters:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: real
+            image: firedrakeproject/firedrake-vanilla-default@sha256:6b1a7eaebe1013d2eb0abbb71cb872cbf1c3f3c5c480b272a48ac130be470b1e
+          - variant: complex
+            image: firedrakeproject/firedrake-vanilla-complex@sha256:6c1e0921835995095fff7de9328004071f4c9d053276666bcc5e5652be5cc1df
+    container:
+      image: ${{ matrix.image }}
+      options: --cpus 2 --memory 6g
+    env:
+      OMP_NUM_THREADS: 1
+      OPENBLAS_NUM_THREADS: 1
+      OMPI_ALLOW_RUN_AS_ROOT: 1
+      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: 1
+      PYOP3_SPMD_STRICT: 1
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: b2db3df06dafacdc92c87fb2e43dbd168394e279
+          fetch-depth: 2
+          path: firedrake-repo
+      - uses: actions/checkout@v7
+        with:
+          repository: FEniCS/ufl
+          ref: bf8a47b9b49f58a94085e2727ac2c711a2594a4b
+          fetch-depth: 2
+          path: ufl-src
+      - uses: actions/checkout@v7
+        with:
+          repository: firedrakeproject/fiat
+          ref: 91b20b48fd6bae52935b22c1d56cc28c986a1ead
+          path: fiat-src
+      - name: Install pinned sources
+        id: install
+        run: |
+          python3 -m venv --system-site-packages /tmp/parameters-venv
+          /tmp/parameters-venv/bin/python -m pip install --no-deps --no-build-isolation -e ./ufl-src
+          /tmp/parameters-venv/bin/python -m pip install --no-deps --no-build-isolation --config-settings editable_mode=compat -e ./fiat-src
+          /tmp/parameters-venv/bin/python -m pip install --no-deps --no-build-isolation --config-settings editable_mode=compat -e ./firedrake-repo
+          /tmp/parameters-venv/bin/python -m pip install 'mpi-pytest>=2026.0' pytest flake8 cython-lint
+          mkdir -p results
+          git -C ufl-src diff --exit-code HEAD
+          git -C firedrake-repo rev-parse HEAD > results/firedrake-sha.txt
+          git -C ufl-src rev-parse HEAD > results/ufl-sha.txt
+          git -C fiat-src rev-parse HEAD > results/fiat-sha.txt
+          /tmp/parameters-venv/bin/python -m pip freeze > results/pip-freeze.txt
+          /tmp/parameters-venv/bin/python - <<'PY'
+          import json, platform
+          from pathlib import Path
+          import firedrake, ufl
+          from firedrake.utils import complex_mode
+          from petsc4py import PETSc
+          assert str(Path(firedrake.__file__).resolve()).startswith(str(Path('firedrake-repo').resolve()))
+          assert str(Path(ufl.__file__).resolve()).startswith(str(Path('ufl-src').resolve()))
+          report = {'python': platform.python_version(), 'petsc': PETSc.Sys.getVersion(), 'complex_mode': complex_mode}
+          Path('results/environment.json').write_text(json.dumps(report, indent=2))
+          print(report)
+          PY
+      - name: Verify the merged UFL and Firedrake source for the integration runs
+        if: always() && steps.install.outcome == 'success'
+        run: |
+          test "$(git -C ufl-src rev-parse HEAD)" = bf8a47b9b49f58a94085e2727ac2c711a2594a4b
+          test "$(git -C firedrake-repo rev-parse HEAD)" = b2db3df06dafacdc92c87fb2e43dbd168394e279
+          git -C ufl-src diff --exit-code HEAD
+          git -C firedrake-repo diff --exit-code HEAD
+      - name: Run targeted numerical regressions
+        run: |
+          cd firedrake-repo
+          for ranks in 1 2; do
+            mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_assemble_baseform.py -k vector_formsum_rejects
+          done
