@@ -134,7 +134,10 @@ class PytorchOperator(MLOperator):
             x = torch.cat(values, dim=1)
         else:
             x = torch.cat(values)
-        reference = self._parameters.tensors[0]
+        tensors = self._parameters.tensors
+        if any(self.model.get_parameter(name) is not t for name, t in zip(self._parameter_names, tensors, strict=True)):
+            raise ValueError("The model replaced a bound parameter. Create a new MLParameters handle.")
+        reference = tensors[0]
         dtype = reference.dtype
         if x.is_complex() and not reference.is_complex():
             dtype = torch.promote_types(dtype, torch.complex64)

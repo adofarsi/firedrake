@@ -1,3 +1,5 @@
+from io import BytesIO
+
 import pytest
 import numpy as np
 import ufl
@@ -327,12 +329,21 @@ def test_ml_parameters_storage_and_snapshots(complex_parameters: bool) -> None:
     saved = parameters.copy()
     assert type(saved) is Function and saved.function_space() is parameters.function_space()
     originals = tuple(t.detach().clone() for t in tensors)
+    checkpoint = BytesIO()
+    torch.save(model.state_dict(), checkpoint)
     optimiser = torch.optim.SGD(parameters.tensors, lr=0.1)
     model(torch.ones(2, dtype=dtype)).real.sum().backward()
     optimiser.step()
     for value, original in zip(parameters.tensors, originals):
         torch.testing.assert_close(value, original - 0.1)
 
+    checkpoint.seek(0)
+    model.load_state_dict(torch.load(checkpoint, weights_only=True))
+    for t, original in zip(parameters.tensors, originals, strict=True):
+        torch.testing.assert_close(t, original)
+    with torch.no_grad():
+        for t in tensors:
+            t.zero_()
     assert parameters.assign(saved) is parameters
     assert tuple(t.data_ptr() for t in parameters.tensors) == pointers
     assert all(t is p for t, p in zip(parameters.tensors, model.parameters()))
