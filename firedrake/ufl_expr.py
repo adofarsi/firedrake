@@ -40,7 +40,8 @@ class Argument(ufl.argument.Argument):
         return super().__new__(cls, *args, **kwargs)
 
     def __init__(self, function_space, number, part=None):
-        if function_space.ufl_element().family() == "Real" and function_space.shape != ():
+        if (function_space.ufl_element().family() == "Real" and function_space.shape
+                and function_space.ufl_domain() is not None):
             raise NotImplementedError(f"{type(self).__name__} on a vector-valued Real space is not supported.")
         super(Argument, self).__init__(function_space.ufl_function_space(),
                                        number, part=part)
@@ -96,7 +97,8 @@ class Coargument(ufl.argument.Coargument):
     """
 
     def __init__(self, function_space, number, part=None):
-        if function_space.ufl_element().family() == "Real" and function_space.shape != ():
+        if (function_space.ufl_element().family() == "Real" and function_space.shape
+                and function_space.ufl_domain() is not None):
             raise NotImplementedError(f"{type(self).__name__} on a vector-valued Real space is not supported.")
         super(Coargument, self).__init__(function_space.ufl_function_space(),
                                          number, part=part)
