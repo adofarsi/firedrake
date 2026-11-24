@@ -1891,6 +1891,7 @@ class ParloopBuilder:
                 self._mesh,
                 self._integral_type,
                 None,
+                False,
             )
         else:
             return self._topology.iter(
