@@ -145,6 +145,8 @@ class PytorchOperator(MLOperator):
         return to_torch(field, gather=not self._pointwise, batched=False)
 
     def _owned_values(self, values, space):
+        if values.is_complex() and not utils.complex_mode:
+            raise ValueError("A real Firedrake build requires a real-valued output field.")
         layout = space.template_vec
         expected = layout.getLocalSize() if self._pointwise else layout.getSize()
         if values.numel() != expected:

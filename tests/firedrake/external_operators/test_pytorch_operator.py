@@ -391,7 +391,9 @@ def test_ml_parameters_on_two_meshes() -> None:
     for u in states:
         V = u.function_space()
         N = ml_operator(model, V, inputs_format=1)
-        residual = inner(N(u, theta), TestFunction(V)) * dx
+        output = N(u, theta)
+        assert grad(output).ufl_shape == (V.mesh().geometric_dimension,)
+        residual = inner(output, TestFunction(V)) * dx
         assert residual.domain_numbering() == {V.mesh(): 0}
         contributions.append(restructure_base_form(action(adjoint(derivative(residual, theta)), u)))
 
@@ -554,7 +556,7 @@ def test_ml_parameters_multiple_fields(inputs_format: str | int) -> None:
     gradient = assemble(action(adjoint(jac), seed))
     np.testing.assert_allclose(gradient.dat.data_ro, [4, 5, 1])
     foreign = Function(MLParameters(Linear(2, 1, dtype=dtype).parameters()).function_space())
-    with pytest.raises(ValueError, match="function spaces"):
+    with pytest.raises(TypeError, match="function spaces"):
         action(jac, foreign)
 
 
