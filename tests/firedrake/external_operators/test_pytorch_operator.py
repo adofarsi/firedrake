@@ -496,6 +496,10 @@ def test_ml_parameters_training_step() -> None:
     assert np.isclose((plus - minus) / 2e-5, 1)
 
     other = MLParameters(Linear(1, 1, dtype=dtype).parameters())
+    out = Cofunction(other.function_space().dual(), val=[4, 5])
+    with pytest.raises(ValueError, match="function space"):
+        assemble(derivative_sum, tensor=out)
+    np.testing.assert_array_equal(out.dat.data_ro, [4, 5])
     with pytest.raises(ValueError, match="with respect to these parameters"):
         other.backward(gradient)
     assert all(p.grad is None for p in other.tensors)
