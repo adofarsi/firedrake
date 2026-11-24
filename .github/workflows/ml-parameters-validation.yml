@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 1830397191e57752d97692e406058ae62e58ce09
+          ref: 0faebd267f4d14ec4930ebe4f7a04f05ad5dcab9
           fetch-depth: 2
           path: firedrake-repo
       - uses: actions/checkout@v7
@@ -85,7 +85,7 @@ jobs:
         if: always() && steps.install.outcome == 'success'
         run: |
           test "$(git -C ufl-src rev-parse HEAD)" = bf8a47b9b49f58a94085e2727ac2c711a2594a4b
-          test "$(git -C firedrake-repo rev-parse HEAD)" = 1830397191e57752d97692e406058ae62e58ce09
+          test "$(git -C firedrake-repo rev-parse HEAD)" = 0faebd267f4d14ec4930ebe4f7a04f05ad5dcab9
           git -C ufl-src diff --exit-code HEAD
           git -C firedrake-repo diff --exit-code HEAD
       - name: Source lint
@@ -107,6 +107,13 @@ jobs:
         run: |
           cd firedrake-repo
           timeout -k 10s 180s mpiexec --oversubscribe -n 2 /tmp/parameters-venv/bin/python -m pytest -v --tb=short -m 'parallel[match]' tests/firedrake/external_operators/test_pytorch_operator.py -k ml_parameters --junitxml=../results/parameters-n2.xml 2>&1 | tee ../results/parameters-n2.log
+      - name: Generic space and FormSum regressions
+        if: always() && steps.install.outcome == 'success'
+        run: |
+          cd firedrake-repo
+          for ranks in 1 2; do
+            mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/{test_assemble_baseform,test_real_space}.py -k 'vector_formsum_rejects or mesh_independent_real_space'
+          done
       - name: Train on an interval and a square for ten optimizer steps
         if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
         env:
