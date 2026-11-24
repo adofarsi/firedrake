@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: dae05e66290a6dace8d3e66f261896f8e7abc846
+          ref: 735cb524a272c5851c1d349b3529a93a89820cdf
           fetch-depth: 2
           path: firedrake-repo
       - uses: actions/checkout@v7
@@ -85,7 +85,7 @@ jobs:
         if: always() && steps.install.outcome == 'success'
         run: |
           test "$(git -C ufl-src rev-parse HEAD)" = bf8a47b9b49f58a94085e2727ac2c711a2594a4b
-          test "$(git -C firedrake-repo rev-parse HEAD)" = dae05e66290a6dace8d3e66f261896f8e7abc846
+          test "$(git -C firedrake-repo rev-parse HEAD)" = 735cb524a272c5851c1d349b3529a93a89820cdf
           git -C ufl-src diff --exit-code HEAD
           git -C firedrake-repo diff --exit-code HEAD
       - name: Source lint
