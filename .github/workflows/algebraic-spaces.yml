@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 05b45cdba2a4318c17133c7eb3d064a702f39b00
+          ref: 2888fb7ca25dc8d6bd90210a2bba787adfaa40e9
           fetch-depth: 2
           path: firedrake-repo
       - uses: actions/checkout@v7
@@ -78,7 +78,7 @@ jobs:
         if: always() && steps.install.outcome == 'success'
         run: |
           test "$(git -C ufl-src rev-parse HEAD)" = bf8a47b9b49f58a94085e2727ac2c711a2594a4b
-          test "$(git -C firedrake-repo rev-parse HEAD)" = 05b45cdba2a4318c17133c7eb3d064a702f39b00
+          test "$(git -C firedrake-repo rev-parse HEAD)" = 2888fb7ca25dc8d6bd90210a2bba787adfaa40e9
           git -C ufl-src diff --exit-code HEAD
           git -C firedrake-repo diff --exit-code HEAD
       - name: Run targeted numerical regressions
