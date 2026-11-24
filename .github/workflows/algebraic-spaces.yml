@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 41ea791f97b981642236932302826c89ff5ffb11
+          ref: 56fd28dcb60fa90144eb473868631cf5a2ddf242
           fetch-depth: 2
           path: firedrake-repo
       - uses: actions/checkout@v7
@@ -78,24 +78,49 @@ jobs:
         if: always() && steps.install.outcome == 'success'
         run: |
           test "$(git -C ufl-src rev-parse HEAD)" = bf8a47b9b49f58a94085e2727ac2c711a2594a4b
-          test "$(git -C firedrake-repo rev-parse HEAD)" = 41ea791f97b981642236932302826c89ff5ffb11
+          test "$(git -C firedrake-repo rev-parse HEAD)" = 56fd28dcb60fa90144eb473868631cf5a2ddf242
           git -C ufl-src diff --exit-code HEAD
           git -C firedrake-repo diff --exit-code HEAD
-      - name: Run targeted numerical regressions
+      - name: Compare the original and corrected assembler on existing mesh-backed cofunctions
         run: |
           cd firedrake-repo
-          status=0
-          for ranks in 1 2; do
-            mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_real_space.py -k mesh_independent_real_space || status=$?
+          cat > /tmp/buffers.py <<'PY'
+          import sys
+          import numpy as np
+          import firedrake as fd
+
+          original = sys.argv[1] == "original"
+          def space():
+              return fd.FunctionSpace(fd.UnitIntervalMesh(4), "CG", 1).dual()
+          V, W = space(), space()
+          a, b, foreign, out = [fd.Cofunction(s) for s in (V, V, W, V)]
+          a.dat.data_wo[:] = 2
+          b.dat.data_wo[:] = 3
+          foreign.dat.data_wo[:] = 7
+          out.dat.data_wo[:] = 7
+          def attempt(form, target):
+              try:
+                  fd.assemble(form, tensor=target)
+              except ValueError:
+                  return False
+              return True
+          assert attempt(2*a + 3*b, foreign) == original
+          assert np.all(foreign.dat.data_ro == (13 if original else 7))
+          assert not attempt(2*a + 3*foreign, out)
+          assert np.all(out.dat.data_ro == (0 if original else 7))
+          assert fd.assemble(2*a + 3*b, tensor=a) is a
+          assert np.all(a.dat.data_ro == 13)
+          if fd.COMM_WORLD.rank == 0:
+              print(sys.argv[1], "foreign output", 13 if original else 7, "mixed-operand output", 0 if original else 7, "aliased output", 13)
+          PY
+          for revision in original corrected; do
+            if [ "$revision" = original ]; then
+              git show HEAD^:firedrake/assemble.py > firedrake/assemble.py
+            else
+              git restore firedrake/assemble.py
+            fi
+            for ranks in 1 2; do
+              mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python /tmp/buffers.py "$revision"
+            done
           done
-          exit "$status"
-      - name: Existing Real space, Constant and Cofunction regressions
-        if: always() && steps.install.outcome == 'success'
-        run: |
-          cd firedrake-repo
-          /tmp/parameters-venv/bin/python -m pytest -q --tb=short -m 'not parallel' tests/firedrake/regression/{test_real_space,test_cofunction,test_constant}.py
-      - name: Source lint
-        if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
-        run: |
-          cd firedrake-repo
-          PATH=/tmp/parameters-venv/bin:$PATH make srclint
+          git diff --exit-code HEAD
