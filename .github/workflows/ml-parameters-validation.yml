@@ -16,9 +16,9 @@ jobs:
       matrix:
         include:
           - variant: real
-            image: firedrakeproject/firedrake-vanilla-default@sha256:6b1a7eaebe1013d2eb0abbb71cb872cbf1c3f3c5c480b272a48ac130be470b1e
+            image: firedrakeproject/firedrake-vanilla-default@sha256:f1b31471d540f915bd53efb92224306967fa6ec93c6ce37c727c43e02d53aac0
           - variant: complex
-            image: firedrakeproject/firedrake-vanilla-complex@sha256:6c1e0921835995095fff7de9328004071f4c9d053276666bcc5e5652be5cc1df
+            image: firedrakeproject/firedrake-vanilla-complex@sha256:ff2a7711ce81d269e53d0d777f162211015b501205dabee79090c1d045547621
     container:
       image: ${{ matrix.image }}
       options: --cpus 2 --memory 6g
@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 2121cc4b7d7b3e9d6ac446aade9449d69197940b
+          ref: a8fc0fbcaa0ef759d4ac3804641266f960ca19b2
           fetch-depth: 2
           path: firedrake-repo
       - uses: actions/checkout@v7
@@ -85,7 +85,7 @@ jobs:
         if: always() && steps.install.outcome == 'success'
         run: |
           test "$(git -C ufl-src rev-parse HEAD)" = bf8a47b9b49f58a94085e2727ac2c711a2594a4b
-          test "$(git -C firedrake-repo rev-parse HEAD)" = 2121cc4b7d7b3e9d6ac446aade9449d69197940b
+          test "$(git -C firedrake-repo rev-parse HEAD)" = a8fc0fbcaa0ef759d4ac3804641266f960ca19b2
           git -C ufl-src diff --exit-code HEAD
           git -C firedrake-repo diff --exit-code HEAD
       - name: Source lint

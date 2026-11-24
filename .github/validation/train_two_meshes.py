@@ -5,6 +5,7 @@ Use a real, double-precision Firedrake build and CPU PyTorch. Run with
 the square two ranks.
 """
 
+import firedrake as fd
 import numpy as np
 import torch
 from mpi4py import MPI
@@ -12,10 +13,10 @@ from mpi4py import MPI
 
 def sum_losses_across_rank_groups(
     group_loss: float,
-    group_gradient: tuple[torch.Tensor, ...],
+    group_gradient: fd.Cofunction,
     group_comm: MPI.Comm,
     training_comm: MPI.Comm,
-) -> tuple[float, tuple[torch.Tensor, ...]]:
+) -> tuple[float, fd.Cofunction]:
     """Sum each MPI rank group's loss and weight gradient exactly once.
 
     Call on every rank of ``training_comm``. The groups must partition that
@@ -32,14 +33,12 @@ def sum_losses_across_rank_groups(
         return buffer
 
     loss = sum_once(np.asarray(group_loss, dtype=np.float64)).item()
-    gradient = tuple(
-        torch.from_numpy(sum_once(g.detach().numpy())) for g in group_gradient
-    )
+    gradient = fd.Cofunction(group_gradient.function_space())
+    gradient.dat.data_wo[:] = sum_once(group_gradient.dat.data_ro)
     return loss, gradient
 
 
 def main() -> None:
-    import firedrake as fd
     from firedrake.ml.pytorch import MLParameters, ml_operator
 
     training_comm = MPI.COMM_WORLD
@@ -51,6 +50,9 @@ def main() -> None:
         model.weight.fill_(1.0)
         model.bias.zero_()
     theta = MLParameters(model.parameters())
+    layout = tuple((name, tuple(p.shape), str(p.dtype)) for name, p in model.named_parameters())
+    if len(set(training_comm.allgather(layout))) != 1:
+        raise ValueError("Training ranks must agree on parameter names, order, shapes and dtypes.")
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
 
     interval = training_comm.rank == 0
@@ -70,17 +72,13 @@ def main() -> None:
 
     mesh_loss = fd.assemble(J).real
     gradient = fd.assemble(fd.derivative(J, theta))
-    loss, totals = sum_losses_across_rank_groups(
-        mesh_loss, gradient.tensors, mesh_comm, training_comm
-    )
-    for block, total in zip(gradient.tensors, totals, strict=True):
-        block.copy_(total)
+    loss, gradient = sum_losses_across_rank_groups(mesh_loss, gradient, mesh_comm, training_comm)
 
     optimizer.zero_grad(set_to_none=True)
     theta.backward(gradient)
     optimizer.step()
 
-    dw, db = gradient.tensors
+    dw, db = model.weight.grad, model.bias.grad
     np.testing.assert_allclose((loss, dw.item(), db.item()), (2.5, 5.0, 3.0))
     np.testing.assert_allclose((model.weight.item(), model.bias.item()), (0.5, -0.3))
     if training_comm.rank == 0:
