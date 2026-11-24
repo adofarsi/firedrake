@@ -541,6 +541,11 @@ def test_ml_parameters_binding() -> None:
         with pytest.raises(ValueError, match="inputs_format must be"):
             ml_operator(model, V, inputs_format=invalid)
 
+    op = ml_operator(model, V, inputs_format="pointwise")(u, u, theta)
+    model.weight = torch.nn.Parameter(model.weight.detach().clone())
+    with pytest.raises(ValueError, match="replaced a bound parameter|distinct parameters"):
+        assemble(op)
+
 
 @pytest.mark.skiptorch
 @pytest.mark.parallel(nprocs=[1, 2])
@@ -640,3 +645,23 @@ def test_ml_parameters_complex_directions() -> None:
         assert assemble(action(g, h)).real == pytest.approx(finite_difference)
     model.zero_grad(set_to_none=False)
     np.testing.assert_array_equal(g.dat.data_ro, before)
+
+
+@pytest.mark.skiptorch
+@pytest.mark.parallel(nprocs=[1, 2])
+def test_ml_parameters_mixed_cotangent() -> None:
+    """Preserve the native scalar field of each parameter block."""
+    z = torch.nn.Parameter(torch.tensor(0j, dtype=torch.complex128))
+    r = torch.nn.Parameter(torch.tensor(0., dtype=torch.float32))
+    theta = MLParameters((z, r))
+    dual = theta.function_space().dual()
+    g = Cofunction(dual, val=[2 + 3j, 4] if complex_mode else [2, 3, 4])
+    theta.backward(g)
+    assert z.grad.item() == 2 + 3j
+    assert r.grad.item() == 4
+    if complex_mode:
+        invalid = Cofunction(dual, val=[7, 4 + 1j])
+        with pytest.raises(ValueError, match="non-real coordinate"):
+            theta.backward(invalid)
+        assert z.grad.item() == 2 + 3j
+        assert r.grad.item() == 4

@@ -353,8 +353,9 @@ def ml_operator(model, function_space, inputs_format: int | str = 0):
     example, ``model.eval()`` for modules with dropout or batch normalization).
 
     The assembled gradient is a Firedrake Cofunction in the dual of the
-    parameter space. It includes every contribution on the mesh communicator. Ranks must start with the same model parameters and
-    apply the same optimizer step. A weight Jacobian is evaluated by applying
+    parameter space. It includes every contribution on the mesh communicator.
+    Ranks must start with the same model parameters and apply the same optimizer
+    step. A weight Jacobian is evaluated by applying
     it or its adjoint to a direction.
 
     Parameters
