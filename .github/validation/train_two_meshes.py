@@ -24,17 +24,12 @@ def sum_losses_across_rank_groups(
     use replicas of the same model with matching parameter order, shapes and dtypes.
     """
 
-    def sum_once(value: np.ndarray) -> np.ndarray:
-        if group_comm.rank == 0:
-            buffer = np.array(value, order="C", copy=True)
-        else:
-            buffer = np.zeros_like(value, order="C")
-        training_comm.Allreduce(MPI.IN_PLACE, buffer, op=MPI.SUM)
-        return buffer
-
-    loss = sum_once(np.asarray(group_loss, dtype=np.float64)).item()
+    representative = group_comm.rank == 0
+    loss = training_comm.allreduce(group_loss if representative else 0.0, op=MPI.SUM)
     gradient = fd.Cofunction(group_gradient.function_space())
-    gradient.dat.data_wo[:] = sum_once(group_gradient.dat.data_ro)
+    buffer = gradient.dat.data_wo
+    buffer[:] = group_gradient.dat.data_ro if representative else 0
+    training_comm.Allreduce(MPI.IN_PLACE, buffer, op=MPI.SUM)
     return loss, gradient
 
 
