@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: b2db3df06dafacdc92c87fb2e43dbd168394e279
+          ref: 05b45cdba2a4318c17133c7eb3d064a702f39b00
           fetch-depth: 2
           path: firedrake-repo
       - uses: actions/checkout@v7
@@ -78,12 +78,12 @@ jobs:
         if: always() && steps.install.outcome == 'success'
         run: |
           test "$(git -C ufl-src rev-parse HEAD)" = bf8a47b9b49f58a94085e2727ac2c711a2594a4b
-          test "$(git -C firedrake-repo rev-parse HEAD)" = b2db3df06dafacdc92c87fb2e43dbd168394e279
+          test "$(git -C firedrake-repo rev-parse HEAD)" = 05b45cdba2a4318c17133c7eb3d064a702f39b00
           git -C ufl-src diff --exit-code HEAD
           git -C firedrake-repo diff --exit-code HEAD
       - name: Run targeted numerical regressions
         run: |
           cd firedrake-repo
           for ranks in 1 2; do
-            mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_assemble_baseform.py -k vector_formsum_rejects
+            mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_real_space.py -k mesh_independent_real_space
           done
