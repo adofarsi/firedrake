@@ -544,6 +544,20 @@ def test_real_space_repeated_assembly():
 
 
 @pytest.mark.parallel(nprocs=[1, 2])
+def test_nonspatial_coefficient_in_solver() -> None:
+    mesh = UnitIntervalMesh(4)
+    V = FunctionSpace(mesh, "CG", 1)
+    p = Function(ScalarSpace(NonSpatialDomain(mesh.comm)), val=2)
+    u = Function(V)
+    F = inner(u - p, TestFunction(V)) * dx
+    solver = NonlinearVariationalSolver(NonlinearVariationalProblem(F, u))
+    for value in (2, 3):
+        p.assign(value)
+        solver.solve()
+        assert assemble(inner(u - value, u - value) * dx) == pytest.approx(0)
+
+
+@pytest.mark.parallel(nprocs=[1, 2])
 @pytest.mark.parametrize("shape", [(), (4,), (2, 2)])
 def test_mesh_independent_real_space(shape):
     from firedrake.ufl_expr import extract_domains

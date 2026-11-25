@@ -372,7 +372,7 @@ class _SNESContext:
 
     @cached_property
     def coefficient_dms(self) -> tuple[PETSc.DM, ...]:
-        """Return the unique DMs of the coefficients of F, J, Jp, E, bcs and the appctx."""
+        """Return the unique spatial coefficient DMs of the problem and the appctx."""
         problem = self._problem
         objs = (problem.F, problem.J, problem.Jp, problem.E, *problem.bcs)
         problem_coefficients = chain.from_iterable(f.coefficients() for f in objs if f is not None)
@@ -381,6 +381,8 @@ class _SNESContext:
         coefficients = utils.unique(chain(problem_coefficients, appctx_coefficients))
         dms = []
         for coefficient in coefficients:
+            if not coefficient.ufl_domains():
+                continue
             dm = coefficient.function_space().dm
             if dm not in dms:
                 dms.append(dm)
