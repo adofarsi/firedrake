@@ -44,16 +44,6 @@ class _RealElement(ufl.AbstractFiniteElement):
         return repr(self)
 
 
-@dataclass(eq=False)
-class _Layout:
-    domain: NonSpatialDomain
-    shape: tuple[int, ...]
-
-    @cached_property
-    def axes(self) -> op3.AxisTree:
-        return real_axes(self.domain.comm, self.shape)
-
-
 class NonSpatialDomain(ufl.NonSpatialDomain):
     """Declare coefficient spaces that share a communicator and have no geometry.
 
@@ -70,21 +60,20 @@ class NonSpatialDomain(ufl.NonSpatialDomain):
     def __init__(self, comm: MPI.Comm) -> None:
         super().__init__()
         self.comm = comm
-        self._layouts: dict[tuple[int, ...], _Layout] = {}
+        self._axes_by_shape: dict[tuple[int, ...], op3.AxisTree] = {}
 
-    def _layout(self, shape: tuple[int, ...]) -> _Layout:
-        if shape not in self._layouts:
-            self._layouts[shape] = _Layout(self, shape)
-        return self._layouts[shape]
+    def _axes(self, shape: tuple[int, ...]) -> op3.AxisTree:
+        if shape not in self._axes_by_shape:
+            self._axes_by_shape[shape] = real_axes(self.comm, shape)
+        return self._axes_by_shape[shape]
 
 
 class ScalarSpaceBase:
     parent = None
 
-    def __init__(self, layout: _Layout, name: str | None = None) -> None:
-        self._layout = layout
+    def __init__(self, domain: NonSpatialDomain, shape: tuple[int, ...], name: str | None) -> None:
         self.name = name
-        super().__init__(layout.domain, _RealElement(layout.shape))
+        super().__init__(domain, _RealElement(shape))
 
     def __len__(self) -> int:
         return 1
@@ -99,11 +88,11 @@ class ScalarSpaceBase:
 
     @property
     def comm(self) -> MPI.Comm:
-        return self._layout.domain.comm
+        return self.ufl_domain().comm
 
     @property
     def shape(self) -> tuple[int, ...]:
-        return self._layout.shape
+        return self.value_shape
 
     @property
     def topological(self) -> ScalarSpaceBase:
@@ -120,7 +109,7 @@ class ScalarSpaceBase:
         return self.value_size
 
     def make_dat(self, val=None, valuetype=ScalarType, name: str | None = None) -> op3.Dat:
-        axes = self._layout.axes
+        axes = self.ufl_domain()._axes(self.shape)
         if val is None:
             return op3.Dat.zeros(axes, dtype=valuetype, name=name)
         data = np.asarray(val, dtype=valuetype)
@@ -159,7 +148,7 @@ class ScalarSpace(ScalarSpaceBase, ufl.FunctionSpace):
         shape = tuple(index(n) for n in shape)
         if any(n < 1 for n in shape):
             raise ValueError("Real space extents must be positive.")
-        super().__init__(domain._layout(shape), name)
+        super().__init__(domain, shape, name)
 
     @cached_property
     def _dual_space(self) -> _DualScalarSpace:
@@ -173,7 +162,7 @@ class ScalarSpace(ScalarSpaceBase, ufl.FunctionSpace):
 class _DualScalarSpace(ScalarSpaceBase, ufl.functionspace.DualSpace):
     def __init__(self, primal: ScalarSpace) -> None:
         self._primal_space = primal
-        super().__init__(primal._layout, primal.name)
+        super().__init__(primal.ufl_domain(), primal.shape, primal.name)
 
     def dual(self) -> ScalarSpace:
         return self._primal_space

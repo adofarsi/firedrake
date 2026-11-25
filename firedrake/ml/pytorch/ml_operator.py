@@ -83,6 +83,9 @@ class PytorchOperator(MLOperator):
                 raise ValueError("A named inputs_format requires an explicit MLParameters operand.")
             self.model.type(dtype)
         else:
+            comm = self._parameters.function_space().comm
+            if comm.size > 1 and MPI.Comm.Compare(comm, function_space.comm) not in {MPI.IDENT, MPI.CONGRUENT}:
+                raise ValueError("Transfer shared parameters to the operator communicator first.")
             if not self._fields:
                 raise ValueError("A trainable ML operator requires a field input.")
             names = {id(p): name for name, p in self.model.named_parameters()}
@@ -194,10 +197,11 @@ class PytorchOperator(MLOperator):
             operand = self.ufl_operands[self.derivatives.index(1)]
             if operand is self._parameters:
                 result = Cofunction(operand.function_space().dual())
-                operand._pack(gradients, result)
+                values = result.dat.data_wo_with_halos.reshape(-1)
+                operand._pack(gradients, values)
                 if self._pointwise:
                     # Global models already receive the complete seed on every rank.
-                    self.function_space().comm.Allreduce(MPI.IN_PLACE, result.dat.data_rw, op=MPI.SUM)
+                    self.function_space().comm.Allreduce(MPI.IN_PLACE, values, op=MPI.SUM)
                 return result
             space = operand.ufl_function_space().dual()
             return from_torch(self._owned_values(gradients[0], space).detach().resolve_conj().cpu(), space)

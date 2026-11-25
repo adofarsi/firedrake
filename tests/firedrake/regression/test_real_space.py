@@ -589,6 +589,13 @@ def test_mesh_independent_real_space(shape):
 def test_nonspatial_integral_and_derivative(shape):
     domain = NonSpatialDomain(COMM_WORLD)
     P = ScalarSpace(domain, shape)
+    if not shape:
+        assert P == FunctionSpace(domain, "Real", 0)
+        assert P.dual() == DualSpace(domain, "Real", 0)
+    elif len(shape) == 1:
+        assert P == VectorFunctionSpace(domain, "Real", 0, dim=shape[0])
+    else:
+        assert P == TensorFunctionSpace(domain, "Real", 0, shape=shape)
     values = np.arange(1, P.dim() + 1, dtype=float)
     p = Function(P, val=values)
     direction = Function(P, val=2 * values)
@@ -609,3 +616,24 @@ def test_nonspatial_integral_and_derivative(shape):
             assert g.function_space() == P.dual()
             assert np.allclose(g.dat.data_ro_with_halos.ravel(), values)
             assert assemble(action(g, direction)) == pytest.approx(2 * np.dot(values, values))
+
+
+@pytest.mark.parallel(nprocs=[1, 2])
+def test_nonspatial_sum_and_adjoint():
+    pspace = FunctionSpace(NonSpatialDomain(COMM_WORLD), "Real", 0)
+    p = Function(pspace, val=2.0)
+    meshes = (UnitIntervalMesh(4), UnitSquareMesh(2, 2))
+    losses = []
+    for i, mesh in enumerate(meshes, start=1):
+        V = FunctionSpace(mesh, "CG", 1)
+        u = Function(V).assign(i)
+        losses.append(inner(u, p) * dx(domain=mesh))
+        B = inner(TrialFunction(pspace), TestFunction(V)) * dx(domain=mesh)
+        image = assemble(action(B, p))
+        pullback = assemble(action(adjoint(B), u))
+        assert assemble(action(image, u)) == pytest.approx(2 * i)
+        assert assemble(action(pullback, p)) == pytest.approx(2 * i)
+    assert assemble(sum(losses)) == pytest.approx(6)
+    gradient = assemble(sum(derivative(loss, p) for loss in losses))
+    assert gradient.function_space() == pspace.dual()
+    assert gradient.dat.data_ro_with_halos.item() == pytest.approx(3)

@@ -28,10 +28,13 @@ class MLParameters(ufl.Coefficient):
         The model tensors in parameter order. Their shapes, dtypes and devices
         must remain fixed. Construct the handle after loading and moving the model.
 
+    comm : mpi4py.MPI.Comm, optional
+        Ranks that share a parameter vector. The default is one replica per process.
+
     Notes
     -----
-    Each process owns its model replica. Operators on any mesh can refer to the
-    same handle. Gradients and directions use coordinates in parameter order.
+    Each process owns its live model tensors. Ranks that share a parameter
+    vector must use the same parameter order and initialise their replicas consistently. Gradients and directions use coordinates in parameter order.
     In real scalar builds, the real and imaginary parts of each complex entry
     occupy adjacent coordinates.
     """
@@ -39,7 +42,7 @@ class MLParameters(ufl.Coefficient):
     def __new__(cls, *args: object, **kwargs: object) -> Self:
         return object.__new__(cls)
 
-    def __init__(self, parameters: Iterable[torch.Tensor]) -> None:
+    def __init__(self, parameters: Iterable[torch.Tensor], *, comm: MPI.Comm = MPI.COMM_SELF) -> None:
         import torch
 
         self._tensors = tuple(parameters)
@@ -54,7 +57,7 @@ class MLParameters(ufl.Coefficient):
         size = sum(self._sizes)
         if not size:
             raise ValueError("A parameter vector must contain at least one scalar.")
-        domain = NonSpatialDomain(MPI.COMM_SELF)
+        domain = NonSpatialDomain(comm)
         super().__init__(VectorFunctionSpace(domain, "Real", 0, dim=size))
 
     @property
@@ -68,10 +71,9 @@ class MLParameters(ufl.Coefficient):
         """Return the space of parameter directions."""
         return self.ufl_function_space()
 
-    def _pack(self, blocks: Iterable[torch.Tensor], out: Function | Cofunction) -> None:
+    def _pack(self, blocks: Iterable[torch.Tensor], dest: np.ndarray) -> None:
         import torch
 
-        dest = out.dat.data_wo.reshape(-1)
         dtype = torch.from_numpy(np.empty((), dtype=ScalarType)).dtype
         start = 0
         for block, size in zip(blocks, self._sizes, strict=True):
@@ -84,7 +86,7 @@ class MLParameters(ufl.Coefficient):
     def _unpack(self, value: Function | Cofunction) -> tuple[torch.Tensor, ...]:
         import torch
 
-        data = value.dat.data_ro.reshape(-1)
+        data = value.dat.data_ro_with_halos.reshape(-1)
         start = 0
         blocks = []
         for t, size in zip(self.tensors, self._sizes, strict=True):
@@ -125,7 +127,9 @@ class MLParameters(ufl.Coefficient):
             Independent values from which the live model can be restored.
         """
         saved = Function(self.function_space())
-        self._pack(self.tensors, saved)
+        owned = saved.dat.data_wo.reshape(-1)
+        if owned.size:
+            self._pack(self.tensors, owned)
         return saved
 
     def assign(self, value: Function) -> Self:

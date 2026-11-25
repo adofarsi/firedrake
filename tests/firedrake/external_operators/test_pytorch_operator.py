@@ -665,3 +665,40 @@ def test_ml_parameters_mixed_cotangent() -> None:
             theta.backward(invalid)
         assert z.grad.item() == 2 + 3j
         assert r.grad.item() == 4
+
+
+@pytest.mark.skiptorch
+@pytest.mark.parallel(nprocs=[2, 3])
+def test_ml_parameters_group_training() -> None:
+    world = COMM_WORLD
+    member = int(world.rank >= (world.size + 1) // 2)
+    group = world.Split(member, -world.rank)
+    try:
+        dtype = torch.from_numpy(np.empty((), dtype=ScalarType)).dtype
+        model = Linear(1, 1, dtype=dtype)
+        with torch.no_grad():
+            model.weight.fill_(1 + world.rank)
+            model.bias.fill_(world.rank)
+        theta = MLParameters(model.parameters(), comm=world)
+        local_theta = MLParameters(model.parameters(), comm=group)
+        transfer = ScalarSpaceTransfer(theta.function_space(), local_theta.function_space())
+        local_theta.assign(transfer.replicate(theta.copy()))
+
+        mesh = UnitIntervalMesh(4, comm=group) if member == 0 else UnitSquareMesh(2, 2, comm=group)
+        V = FunctionSpace(mesh, "CG", 1)
+        field = Function(V).assign(member + 1)
+        prediction = ml_operator(model, V, inputs_format="pointwise")(field, local_theta)
+        loss = inner(1, prediction) * dx
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+        for step in range(2):
+            assert assemble(loss) == pytest.approx((1 - 0.3 * step) * (member + 1) - 0.2 * step)
+            gradient = transfer.adjoint(assemble(derivative(loss, local_theta)))
+            optimizer.zero_grad()
+            theta.backward(gradient)
+            optimizer.step()
+            assert model.weight.grad.item() == pytest.approx(3)
+            assert model.bias.grad.item() == pytest.approx(2)
+        assert model.weight.item() == pytest.approx(0.4)
+        assert model.bias.item() == pytest.approx(-0.4)
+    finally:
+        group.Free()
