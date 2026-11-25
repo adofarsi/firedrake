@@ -67,15 +67,32 @@ def paper_level(annotate):
         return {"first_force": value}
 
 
+def scalar_solve():
+    with stop_annotating():
+        mesh = fd.UnitIntervalMesh(4)
+        V = fd.FunctionSpace(mesh, "CG", 1)
+        p = fd.Function(fd.ScalarSpace(fd.NonSpatialDomain(mesh.comm)), val=2)
+        u = fd.Function(V)
+        F = fd.inner(u - p, fd.TestFunction(V)) * fd.dx
+        solver = fd.NonlinearVariationalSolver(fd.NonlinearVariationalProblem(F, u))
+        means = []
+        for value in (2, 3):
+            p.assign(value)
+            solver.solve()
+            means.append(float(fd.assemble(u * fd.dx).real))
+        np.testing.assert_allclose(means, [2, 3], atol=1.e-12)
+        return {"means": means}
+
+
 if __name__ == "__main__":
     sys.path.insert(0, str(Path("paper/scripts").resolve()))
     probes = {"explicit": lambda: quadratic("explicit"), "control": lambda: quadratic("control"),
               "taped_loss": lambda: quadratic("taped"), "paper_forward": lambda: paper_level(False),
-              "paper_taped": lambda: paper_level(True)}
+              "paper_taped": lambda: paper_level(True), "scalar_solve": scalar_solve}
     results = {}
-    for name, probe in probes.items():
+    for name in sys.argv[1:] or probes:
         try:
-            result = probe()
+            result = probes[name]()
             results[name] = {"passed": True, "result": result}
         except Exception as exc:
             traceback.print_exc()

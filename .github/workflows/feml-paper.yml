@@ -1,4 +1,4 @@
-name: Run the FEML paper on nonspatial scalar spaces
+name: Check the nonspatial coefficient in a variational solve
 
 on:
   push:
@@ -10,14 +10,29 @@ permissions:
 jobs:
   paper:
     runs-on: ubuntu-24.04
-    timeout-minutes: 355
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: base-real
+            ref: a6b64e038d777035ca004d859e3d7b2a558f3bef
+            image: firedrakeproject/firedrake-vanilla-default@sha256:f1b31471d540f915bd53efb92224306967fa6ec93c6ce37c727c43e02d53aac0
+          - name: fixed-real
+            ref: 851cb934030bce654a7720ead69c72fd012af354
+            image: firedrakeproject/firedrake-vanilla-default@sha256:f1b31471d540f915bd53efb92224306967fa6ec93c6ce37c727c43e02d53aac0
+          - name: fixed-complex
+            ref: 851cb934030bce654a7720ead69c72fd012af354
+            image: firedrakeproject/firedrake-vanilla-complex@sha256:ff2a7711ce81d269e53d0d777f162211015b501205dabee79090c1d045547621
     container:
-      image: firedrakeproject/firedrake-vanilla-default@sha256:f1b31471d540f915bd53efb92224306967fa6ec93c6ce37c727c43e02d53aac0
+      image: ${{ matrix.image }}
       options: --cpus 2 --memory 12g
     env:
       OMP_NUM_THREADS: 1
       OPENBLAS_NUM_THREADS: 1
       PYTHONUNBUFFERED: 1
+      OMPI_ALLOW_RUN_AS_ROOT: 1
+      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: 1
     defaults:
       run:
         shell: bash
@@ -28,7 +43,7 @@ jobs:
           sparse-checkout: .github/validation
       - uses: actions/checkout@v7
         with:
-          ref: a6b64e038d777035ca004d859e3d7b2a558f3bef
+          ref: ${{ matrix.ref }}
           path: fd-src
       - uses: actions/checkout@v7
         with:
@@ -67,40 +82,30 @@ jobs:
           for module, repo in ((firedrake, 'fd-src'), (ufl, 'ufl-src')):
               assert Path(module.__file__).resolve().is_relative_to(Path(repo).resolve())
           PY
-      - name: Run the published paper scripts and capture their exit codes
-        if: steps.install.outcome == 'success'
+      - name: Reproduce the scalar solver failure on the original branches
+        if: matrix.name == 'base-real'
         run: |
-          source /tmp/paper-env/bin/activate
-          invalid=0
-          for number in 01 02 03 04 05 06; do
-            if [[ "$number" == 03 && ( ! -f paper/outputs/displacement_controlled/model.pth || ! -f paper/outputs/load_controlled/model.pth ) ]]; then
-              echo 'Missing fresh weights from 01 or 02' > results/03.blocked
-              invalid=1
-              continue
-            fi
-            if [[ "$number" == 06 ]]; then
-              if [[ ! -f paper/outputs/thermal/model.pth ]]; then
-                echo 'Missing fresh weights from 05' > results/06.blocked
-                invalid=1
-                continue
-              fi
-              python -m pip install 'pysr==1.5.10'
-            fi
-            status=0
-            python paper/scripts/"$number"_*.py > "results/$number.log" 2>&1 || status=$?
-            echo "$status" > "results/$number.exit"
-            tail -20 "results/$number.log"
-            if [[ "$status" != 0 ]]; then invalid=1; fi
+          if /tmp/paper-env/bin/python validator/.github/validation/paper_controls.py scalar_solve > results/solver.log 2>&1; then exit 1; fi
+          /tmp/paper-env/bin/python - <<'PYRESULT'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('results/controls.json').read_text())['scalar_solve']
+          assert report['error'] == "AttributeError: 'ScalarSpace' object has no attribute 'dm'", report
+          print(report)
+          PYRESULT
+      - name: Exercise the scalar coefficient through the solver on one and two ranks
+        if: matrix.name != 'base-real'
+        run: |
+          cd fd-src
+          for n in 1 2; do
+            mpiexec --oversubscribe -n "$n" /tmp/paper-env/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_real_space.py::test_nonspatial_coefficient_in_solver 2>&1 | tee "../results/solve-n$n.log"
           done
-          exit "$invalid"
-      - name: Test the explicit parameter and the first paper load level
-        if: always() && steps.install.outcome == 'success'
+      - name: Run the first displacement load level with the paper model
+        if: always() && matrix.name == 'fixed-real' && steps.install.outcome == 'success'
         run: |
-          /tmp/paper-env/bin/python validator/.github/validation/paper_controls.py 2>&1 | tee results/controls.log
+          /tmp/paper-env/bin/python validator/.github/validation/paper_controls.py scalar_solve paper_forward 2>&1 | tee results/forward.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: paper-results
-          path: |
-            results
-            paper/outputs
+          name: solver-${{ matrix.name }}
+          path: results
