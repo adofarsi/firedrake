@@ -635,9 +635,10 @@ def test_nonspatial_sum_and_adjoint():
         pullback = assemble(action(adjoint(B), u))
         assert assemble(action(image, u)) == pytest.approx(2 * i)
         assert assemble(action(pullback, p)) == pytest.approx(2 * i)
-        with matrix.petscmat.createVecRight() as right, u.dat.vec_ro as left:
+        transpose = Cofunction(pspace.dual())
+        with u.dat.vec_ro as left, transpose.dat.vec_wo as right:
             matrix.petscmat.multHermitian(left, right)
-            assert right.norm() == pytest.approx(i)
+        assert transpose.dat.data_ro_with_halos.item() == pytest.approx(i)
     assert assemble(sum(losses)) == pytest.approx(6)
     gradient = assemble(sum(derivative(loss, p) for loss in losses))
     assert gradient.function_space() == pspace.dual()
