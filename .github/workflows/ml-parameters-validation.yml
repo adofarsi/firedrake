@@ -35,13 +35,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: e0b95f4204449d62535e343081adee769090d3dc
+          ref: 6b89bebb24847f59b2a5ae3259861d66e943c618
           fetch-depth: 2
           path: firedrake-repo
       - uses: actions/checkout@v7
         with:
           repository: adofarsi/ufl
-          ref: b28159ba2d2a9cfb74d5a39b73e8198a835e482c
+          ref: 7278d87c16d94a1fe4d063365065704d571e6917
           fetch-depth: 2
           path: ufl-src
       - uses: actions/checkout@v7
@@ -85,8 +85,8 @@ jobs:
       - name: Verify the merged UFL and Firedrake source for the integration runs
         if: always() && steps.install.outcome == 'success'
         run: |
-          test "$(git -C ufl-src rev-parse HEAD)" = b28159ba2d2a9cfb74d5a39b73e8198a835e482c
-          test "$(git -C firedrake-repo rev-parse HEAD)" = e0b95f4204449d62535e343081adee769090d3dc
+          test "$(git -C ufl-src rev-parse HEAD)" = 7278d87c16d94a1fe4d063365065704d571e6917
+          test "$(git -C firedrake-repo rev-parse HEAD)" = 6b89bebb24847f59b2a5ae3259861d66e943c618
           git -C ufl-src diff --exit-code HEAD
           git -C firedrake-repo diff --exit-code HEAD
       - name: Scalar integration and ownership
@@ -143,6 +143,24 @@ jobs:
           for ranks in 1 2; do
             mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -v --tb=short -m 'parallel[match]' tests/firedrake/regression/{test_assemble_baseform,test_real_space}.py -k 'vector_formsum_rejects or mesh_independent_real_space'
           done
+      - name: Probe materializing a scalar-space matrix
+        if: always() && steps.install.outcome == 'success'
+        run: |
+          /tmp/parameters-venv/bin/python - <<'PYTHON' | tee results/scalar-matrix.txt
+          import firedrake as fd
+          mesh = fd.UnitIntervalMesh(4)
+          P = fd.FunctionSpace(fd.NonSpatialDomain(mesh.comm), 'Real', 0)
+          form = fd.inner(fd.TrialFunction(P), fd.TestFunction(P)) * fd.dx(domain=mesh)
+          for mat_type in (None, 'matfree'):
+              try:
+                  A = fd.assemble(form, mat_type=mat_type)
+                  y = fd.assemble(fd.action(A, fd.Function(P, val=2.0)))
+              except (AttributeError, ValueError, TypeError, NotImplementedError) as error:
+                  print(f'{mat_type=}: {type(error).__name__}: {error}')
+              else:
+                  assert abs(y.dat.data_ro_with_halos.item() - 2) < 1.e-12
+                  print(f'{mat_type=}: action agrees with the analytic result')
+          PYTHON
       - name: Train on an interval and a square for ten optimizer steps
         if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
         env:
