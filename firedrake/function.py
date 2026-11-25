@@ -117,7 +117,7 @@ class CoordinatelessFunction(ufl.Coefficient):
             val = parent.dat[self._parent_index]
 
         if isinstance(val, op3.Dat):
-            assert val.comm == self.comm
+            assert MPI.Comm.Compare(val.comm, self.comm) in {MPI.IDENT, MPI.CONGRUENT}
             self._dat = val
         else:
             self._dat = function_space.make_dat(val, dtype, self.name())

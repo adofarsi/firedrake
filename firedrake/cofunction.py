@@ -2,6 +2,7 @@ from functools import cached_property
 import numpy as np
 import ufl
 
+from mpi4py import MPI
 import pyop3 as op3
 from pyadjoint.tape import stop_annotating, annotate_tape, get_working_tape
 from pyop3.cache import with_heavy_caches
@@ -119,7 +120,7 @@ class Cofunction(ufl.Cofunction, CofunctionMixin):
                 raise ValueError("Cofunction values have wrong function space.")
             val = val.dat
         if isinstance(val, op3.Dat):
-            assert val.comm == self.comm
+            assert MPI.Comm.Compare(val.comm, self.comm) in {MPI.IDENT, MPI.CONGRUENT}
             self._dat = val
         else:
             self._dat = function_space.make_dat(val, dtype, self.name())

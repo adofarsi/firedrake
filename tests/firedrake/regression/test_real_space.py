@@ -591,13 +591,14 @@ def test_nonspatial_integral_and_derivative(shape):
     P = ScalarSpace(domain, shape)
     if not shape:
         assert P == FunctionSpace(domain, "Real", 0)
+        from firedrake.functionspace import DualSpace
         assert P.dual() == DualSpace(domain, "Real", 0)
     elif len(shape) == 1:
         assert P == VectorFunctionSpace(domain, "Real", 0, dim=shape[0])
     else:
         assert P == TensorFunctionSpace(domain, "Real", 0, shape=shape)
     values = np.arange(1, P.dim() + 1, dtype=float)
-    p = Function(P, val=values)
+    p = Function(P, val=values.copy())
     direction = Function(P, val=2 * values)
     assert P == ScalarSpace(domain, shape)
     assert P != ScalarSpace(NonSpatialDomain(COMM_WORLD), shape)

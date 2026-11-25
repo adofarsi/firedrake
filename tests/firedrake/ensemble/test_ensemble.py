@@ -452,3 +452,23 @@ def test_nonspatial_transfer(shape):
         assert pairing == pytest.approx(parent.allreduce(group_loss if group.rank == 0 else 0))
     finally:
         group.Free()
+
+
+@pytest.mark.parallel(nprocs=4)
+def test_nonspatial_transfer_ensemble(ensemble):
+    import numpy as np
+
+    P = ScalarSpace(NonSpatialDomain(COMM_WORLD), (2,))
+    Q = ScalarSpace(NonSpatialDomain(ensemble.comm), (2,))
+    transfer = ScalarSpaceTransfer(P, Q)
+    values = np.array([1, 3]) * (1 + ensemble.ensemble_rank)
+    g = Cofunction(Q.dual(), val=values)
+    reduced = Cofunction(Q.dual())
+    ensemble.allreduce(g, reduced)
+    total = transfer.adjoint(g)
+    assert np.allclose(total.dat.data_ro_with_halos, reduced.dat.data_ro_with_halos)
+
+    mesh = UnitIntervalMesh(4, comm=ensemble.comm)
+    p = Function(P)
+    with pytest.raises(CommMismatchError, match="integration communicator"):
+        assemble(inner(p, p) * dx(domain=mesh))

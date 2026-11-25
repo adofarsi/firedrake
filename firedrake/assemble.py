@@ -8,6 +8,7 @@ from functools import cached_property
 
 import firedrake
 import numpy
+from mpi4py import MPI
 from pyadjoint.tape import annotate_tape
 from pyop3.cache import with_heavy_caches
 from tsfc import kernel_args
@@ -19,11 +20,12 @@ from firedrake import parameters, solving, tsfc_interface, utils
 from firedrake.adjoint_utils import annotate_assemble
 from firedrake.ufl_expr import extract_domains
 from firedrake.bcs import DirichletBC, EquationBC, EquationBCSplit
-from firedrake.exceptions import MismatchingFunctionSpaceError
+from firedrake.exceptions import CommMismatchError, MismatchingFunctionSpaceError
 from firedrake.matrix import MatrixBase, Matrix, ImplicitMatrix
 from firedrake.functionspaceimpl import is_mixed
 from firedrake.interpolation import get_interpolator, get_runtime_tabulation_coordinates, SameMeshInterpolator
 from firedrake.pack import pack, modified_lgmaps
+from firedrake.scalarspace import ScalarSpaceBase
 from firedrake.petsc import PETSc, local_submat
 from firedrake.mesh import get_mesh_topologies, MeshGeometry, MeshLoopIndex
 from firedrake.slate import slac, slate
@@ -912,6 +914,14 @@ class FormAssembler(AbstractFormAssembler):
 
     def __init__(self, form, bcs=None, form_compiler_parameters=None, pyop3_compiler_parameters=None):
         super().__init__(form, bcs=bcs, form_compiler_parameters=form_compiler_parameters, pyop3_compiler_parameters=pyop3_compiler_parameters)
+        if isinstance(form, ufl.Form):
+            for terminal in (*form.arguments(), *form.coefficients()):
+                space = terminal.ufl_function_space()
+                if isinstance(space, ScalarSpaceBase) and any(
+                    MPI.Comm.Compare(space.comm, m.comm) not in {MPI.IDENT, MPI.CONGRUENT}
+                    for m in form.ufl_domains()
+                ):
+                    raise CommMismatchError("Transfer the nonspatial value to the integration communicator first.")
         if any(c.dat.dtype != ScalarType for c in form.coefficients()):
             raise ValueError("Cannot assemble a form containing coefficients where the "
                              "dtype is not the PETSc scalar type.")

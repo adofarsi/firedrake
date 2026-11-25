@@ -19,10 +19,10 @@ def real_axes(comm: MPI.Comm, shape: tuple[int, ...]) -> op3.AxisTree:
     size, *rest = shape or (1,)
     root = op3.AxisComponent(size, sf=op3.single_star_sf(comm, size))
     if not shape:
-        return op3.AxisTree(op3.Axis(root))
+        return op3.AxisTree(op3.Axis(root), comm=comm)
     components = [root, *(op3.AxisComponent(n) for n in rest)]
     return op3.AxisTree.from_iterable(
-        op3.Axis(c, label=f"dim{i}") for i, c in enumerate(components)
+        (op3.Axis(c, label=f"dim{i}") for i, c in enumerate(components)), comm=comm
     )
 
 

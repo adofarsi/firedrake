@@ -5,7 +5,6 @@ import contextlib
 import functools
 from typing import TYPE_CHECKING, Any
 
-from mpi4py import MPI
 import numpy as np
 import pyop3 as op3
 import pyop3.types
@@ -150,8 +149,6 @@ def _(
     **kwargs,
 ):
     if isinstance(space, ScalarSpaceBase):
-        if MPI.Comm.Compare(space.comm, loop_index.mesh.comm) not in {MPI.IDENT, MPI.CONGRUENT}:
-            raise ValueError("Transfer the nonspatial value to the integration communicator first.")
         return dat
     # This is tricky. Consider the case where you have a mixed space with hexes and
     # each space needs a different (non-permutation) transform. That means that we
