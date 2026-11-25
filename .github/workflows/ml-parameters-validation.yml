@@ -35,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: cee0f16b77cf4dfa9cb9fac676cc878dc56bac58
+          ref: a6b64e038d777035ca004d859e3d7b2a558f3bef
           fetch-depth: 2
           path: firedrake-repo
       - uses: actions/checkout@v7
@@ -86,7 +86,7 @@ jobs:
         if: always() && steps.install.outcome == 'success'
         run: |
           test "$(git -C ufl-src rev-parse HEAD)" = 7278d87c16d94a1fe4d063365065704d571e6917
-          test "$(git -C firedrake-repo rev-parse HEAD)" = cee0f16b77cf4dfa9cb9fac676cc878dc56bac58
+          test "$(git -C firedrake-repo rev-parse HEAD)" = a6b64e038d777035ca004d859e3d7b2a558f3bef
           git -C ufl-src diff --exit-code HEAD
           git -C firedrake-repo diff --exit-code HEAD
       - name: Scalar integration and ownership
@@ -143,7 +143,7 @@ jobs:
           for ranks in 1 2; do
             mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -v --tb=short -m 'parallel[match]' tests/firedrake/regression/{test_assemble_baseform,test_real_space}.py -k 'vector_formsum_rejects or mesh_independent_real_space'
           done
-      - name: Probe materializing a scalar-space matrix
+      - name: Check scalar-to-scalar matrix assembly
         if: always() && steps.install.outcome == 'success'
         run: |
           /tmp/parameters-venv/bin/python - <<'PYTHON' | tee results/scalar-matrix.txt
@@ -155,8 +155,9 @@ jobs:
               try:
                   A = fd.assemble(form, mat_type=mat_type)
                   y = fd.assemble(fd.action(A, fd.Function(P, val=2.0)))
-              except (AttributeError, ValueError, TypeError, NotImplementedError) as error:
-                  print(f'{mat_type=}: {type(error).__name__}: {error}')
+              except NotImplementedError as error:
+                  assert mat_type is None and 'matfree' in str(error)
+                  print(f'{mat_type=}: {error}')
               else:
                   assert abs(y.dat.data_ro_with_halos.item() - 2) < 1.e-12
                   print(f'{mat_type=}: action agrees with the analytic result')
