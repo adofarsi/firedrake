@@ -1,8 +1,8 @@
-name: Validate MLParameters.backward on shared and disjoint rank groups
+name: Validate nonspatial scalar spaces
 
 on:
   push:
-    branches: [codex/validate-ml-parameters-20261118]
+    branches: [experiment/validate-nonspatial-scalar-space]
 
 permissions:
   contents: read
@@ -34,19 +34,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 0faebd267f4d14ec4930ebe4f7a04f05ad5dcab9
+          ref: 0d61de6dc4e6a6a8f56e220922ba310edab7095e
           fetch-depth: 2
           path: firedrake-repo
       - uses: actions/checkout@v7
         with:
-          repository: FEniCS/ufl
-          ref: bf8a47b9b49f58a94085e2727ac2c711a2594a4b
+          repository: adofarsi/ufl
+          ref: babf7eb1b2994813fa7ab046571cd594e0f02f02
           fetch-depth: 2
           path: ufl-src
       - uses: actions/checkout@v7
         with:
           repository: firedrakeproject/fiat
-          ref: 91b20b48fd6bae52935b22c1d56cc28c986a1ead
+          ref: a02d8ce77a2c88f14c754127422f01ddc6febfd9
           path: fiat-src
       - uses: actions/checkout@v7
         if: matrix.variant == 'real'
@@ -84,10 +84,17 @@ jobs:
       - name: Verify the merged UFL and Firedrake source for the integration runs
         if: always() && steps.install.outcome == 'success'
         run: |
-          test "$(git -C ufl-src rev-parse HEAD)" = bf8a47b9b49f58a94085e2727ac2c711a2594a4b
-          test "$(git -C firedrake-repo rev-parse HEAD)" = 0faebd267f4d14ec4930ebe4f7a04f05ad5dcab9
+          test "$(git -C ufl-src rev-parse HEAD)" = babf7eb1b2994813fa7ab046571cd594e0f02f02
+          test "$(git -C firedrake-repo rev-parse HEAD)" = 0d61de6dc4e6a6a8f56e220922ba310edab7095e
           git -C ufl-src diff --exit-code HEAD
           git -C firedrake-repo diff --exit-code HEAD
+      - name: Scalar integration and ownership
+        if: always() && steps.install.outcome == 'success'
+        run: |
+          cd firedrake-repo
+          for ranks in 1 2; do
+            timeout -k 10s 180s mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -v -x --tb=short -m 'parallel[match]' tests/firedrake/regression/test_real_space.py -k 'nonspatial or mesh_independent_real_space' 2>&1 | tee "../results/scalar-n${ranks}.log"
+          done
       - name: Source lint
         if: steps.install.outcome == 'success' && matrix.variant == 'real'
         run: |
