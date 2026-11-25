@@ -629,7 +629,11 @@ def test_nonspatial_sum_and_adjoint():
         V = FunctionSpace(mesh, "CG", 1)
         u = Function(V).assign(i)
         losses.append(inner(u, p) * dx(domain=mesh))
+        mass = assemble(p * inner(TrialFunction(V), TestFunction(V)) * dx)
+        assert assemble(action(assemble(action(mass, u)), u)) == pytest.approx(2 * i**2)
         B = inner(TrialFunction(pspace), TestFunction(V)) * dx(domain=mesh)
+        with pytest.raises(NotImplementedError, match="matfree"):
+            assemble(B)
         matrix = assemble(B, mat_type="matfree")
         image = assemble(action(matrix, p))
         pullback = assemble(action(adjoint(B), u))

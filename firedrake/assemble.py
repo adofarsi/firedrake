@@ -1409,6 +1409,8 @@ class ExplicitMatrixAssembler(ParloopFormAssembler):
     @with_heavy_caches(lambda self: get_mesh_topologies(self._form))
     def allocate(self):
         test, trial = self._form.arguments()
+        if any(isinstance(arg.function_space(), ScalarSpaceBase) for arg in (test, trial)):
+            raise NotImplementedError("For a nonspatial matrix argument, use mat_type='matfree'.")
         sparsity = self._make_sparsity(
             test,
             trial,
