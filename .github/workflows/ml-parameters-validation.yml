@@ -34,13 +34,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 0d61de6dc4e6a6a8f56e220922ba310edab7095e
+          ref: c98d23b3265874eb8d96caeb33724bedbacf4b0e
           fetch-depth: 2
           path: firedrake-repo
       - uses: actions/checkout@v7
         with:
           repository: adofarsi/ufl
-          ref: babf7eb1b2994813fa7ab046571cd594e0f02f02
+          ref: 44c076f5f7695d0dd4807d8d93050db14078e77a
           fetch-depth: 2
           path: ufl-src
       - uses: actions/checkout@v7
@@ -84,17 +84,28 @@ jobs:
       - name: Verify the merged UFL and Firedrake source for the integration runs
         if: always() && steps.install.outcome == 'success'
         run: |
-          test "$(git -C ufl-src rev-parse HEAD)" = babf7eb1b2994813fa7ab046571cd594e0f02f02
-          test "$(git -C firedrake-repo rev-parse HEAD)" = 0d61de6dc4e6a6a8f56e220922ba310edab7095e
+          test "$(git -C ufl-src rev-parse HEAD)" = 44c076f5f7695d0dd4807d8d93050db14078e77a
+          test "$(git -C firedrake-repo rev-parse HEAD)" = c98d23b3265874eb8d96caeb33724bedbacf4b0e
           git -C ufl-src diff --exit-code HEAD
           git -C firedrake-repo diff --exit-code HEAD
       - name: Scalar integration and ownership
         if: always() && steps.install.outcome == 'success'
         run: |
           cd firedrake-repo
+          result=0
           for ranks in 1 2; do
-            timeout -k 10s 180s mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -v -x --tb=short -m 'parallel[match]' tests/firedrake/regression/test_real_space.py -k 'nonspatial or mesh_independent_real_space' 2>&1 | tee "../results/scalar-n${ranks}.log"
+            timeout -k 10s 140s mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_real_space.py -k 'nonspatial or mesh_independent_real_space' 2>&1 | tee "../results/scalar-n${ranks}.log" || result=$?
           done
+          exit "$result"
+      - name: Transfer and taped gradients across rank groups
+        if: always() && steps.install.outcome == 'success'
+        run: |
+          cd firedrake-repo
+          result=0
+          for ranks in 2 3 4; do
+            timeout -k 10s 130s mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/{ensemble/test_ensemble,adjoint/test_assemble}.py -k nonspatial_transfer 2>&1 | tee "../results/transfer-n${ranks}.log" || result=$?
+          done
+          exit "$result"
       - name: Source lint
         if: steps.install.outcome == 'success' && matrix.variant == 'real'
         run: |
