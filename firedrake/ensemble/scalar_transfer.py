@@ -80,6 +80,8 @@ class ScalarSpaceTransfer:
         Function
             The local group's copy.
         """
+        if not isinstance(value, Function) or value.function_space() != self.source:
+            raise ValueError("Expected a function in the source space.")
         return self._apply(value, False)
 
     def adjoint(self, value: Cofunction) -> Cofunction:
@@ -95,21 +97,19 @@ class ScalarSpaceTransfer:
         Cofunction
             Sum of the group contributions.
         """
+        if not isinstance(value, Cofunction) or value.function_space() != self.target.dual():
+            raise ValueError("Expected a cofunction in the target dual space.")
         return self._apply(value, True)
 
     @overloaded_function(_TransferBlock)
     def _apply(self, value: Function | Cofunction, transpose: bool) -> Function | Cofunction:
         unit, _ = get_mpi_dtype(value.dat.dtype, self.source.dim())
         if transpose:
-            if not isinstance(value, Cofunction) or value.function_space() != self.target.dual():
-                raise ValueError("Expected a cofunction in the target dual space.")
             result = Cofunction(self.source.dual(), dtype=value.dat.dtype)
             args = (unit, value.dat.data_ro, result.dat.data_rw, MPI.SUM)
             self._sf.reduceBegin(*args)
             self._sf.reduceEnd(*args)
         else:
-            if not isinstance(value, Function) or value.function_space() != self.source:
-                raise ValueError("Expected a function in the source space.")
             result = Function(self.target, dtype=value.dat.dtype)
             args = (unit, value.dat.data_ro, result.dat.data_wo, MPI.REPLACE)
             self._sf.bcastBegin(*args)

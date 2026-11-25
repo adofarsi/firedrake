@@ -21,7 +21,8 @@ __all__ = ("MixedFunctionSpace", "FunctionSpace",
            "VectorFunctionSpace", "TensorFunctionSpace", "RestrictedFunctionSpace")
 
 
-def _nonspatial_space(domain, family, degree, shape, name, *element_options):
+def _nonspatial_space(domain: NonSpatialDomain, family: str, degree: int | None,
+                      shape: tuple[int, ...] | None, name: str | None, *element_options: object) -> ScalarSpace:
     if family not in ("Real", "R") or degree not in (None, 0):
         raise ValueError("A nonspatial domain supports the degree-zero Real family.")
     if any(option is not None for option in element_options):
@@ -96,8 +97,8 @@ def FunctionSpace(mesh, family, degree=None, name=None,
 
     Parameters
     ----------
-    mesh :
-        The mesh to determine the cell from.
+    mesh : MeshGeometry or NonSpatialDomain
+        Integration mesh, or the communicator domain for spatially constant values.
     family :
         The finite element family.
     degree :
@@ -138,8 +139,8 @@ def DualSpace(mesh, family, degree=None, name=None,
 
     Parameters
     ----------
-    mesh :
-        The mesh to determine the cell from.
+    mesh : MeshGeometry or NonSpatialDomain
+        Integration mesh, or the communicator domain for spatially constant values.
     family :
         The finite element family.
     degree :
@@ -180,8 +181,8 @@ def VectorFunctionSpace(mesh, family, degree=None, dim=None, name=None,
 
     Parameters
     ----------
-    mesh :
-        The mesh to determine the cell from.
+    mesh : MeshGeometry or NonSpatialDomain
+        Integration mesh, or the communicator domain for spatially constant values.
     family :
         The finite element family.
     degree :
@@ -190,6 +191,7 @@ def VectorFunctionSpace(mesh, family, degree=None, dim=None, name=None,
     dim :
         An optional number of degrees of freedom per function space
         node (defaults to the geometric dimension of the mesh).
+        Specify the dimension on a nonspatial domain.
     name :
         An optional name for the function space.
     vfamily :
@@ -235,8 +237,8 @@ def TensorFunctionSpace(mesh, family, degree=None, shape=None,
 
     Parameters
     ----------
-    mesh :
-        The mesh to determine the cell from.
+    mesh : MeshGeometry or NonSpatialDomain
+        Integration mesh, or the communicator domain for spatially constant values.
     family :
         The finite element family.
     degree :
@@ -245,7 +247,7 @@ def TensorFunctionSpace(mesh, family, degree=None, shape=None,
     shape :
         An optional shape for the tensor-valued degrees of freedom at
         each function space node (defaults to a square tensor using the
-        geometric dimension of the mesh).
+        geometric dimension of the mesh). Specify the shape on a nonspatial domain.
     symmetry :
         Optional symmetries in the tensor value.
     name :

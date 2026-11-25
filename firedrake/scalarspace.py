@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from functools import cached_property
 from operator import index
@@ -78,7 +79,7 @@ class ScalarSpaceBase:
     def __len__(self) -> int:
         return 1
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[ScalarSpaceBase]:
         yield self
 
     def __getitem__(self, i: int) -> ScalarSpaceBase:
@@ -147,7 +148,7 @@ class ScalarSpace(ScalarSpaceBase, ufl.FunctionSpace):
                  name: str | None = None) -> None:
         shape = tuple(index(n) for n in shape)
         if any(n < 1 for n in shape):
-            raise ValueError("Real space extents must be positive.")
+            raise ValueError("Scalar space extents must be positive.")
         super().__init__(domain, shape, name)
 
     @cached_property
