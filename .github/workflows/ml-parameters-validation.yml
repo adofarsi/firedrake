@@ -23,6 +23,7 @@ jobs:
       image: ${{ matrix.image }}
       options: --cpus 2 --memory 6g
     env:
+      PYTEST_ADDOPTS: --color=no -o faulthandler_timeout=35
       OMP_NUM_THREADS: 1
       OPENBLAS_NUM_THREADS: 1
       OMPI_ALLOW_RUN_AS_ROOT: 1
@@ -34,13 +35,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: c98d23b3265874eb8d96caeb33724bedbacf4b0e
+          ref: ef742ec2d740894aedb0f57adf3fcd792b4d4849
           fetch-depth: 2
           path: firedrake-repo
       - uses: actions/checkout@v7
         with:
           repository: adofarsi/ufl
-          ref: 44c076f5f7695d0dd4807d8d93050db14078e77a
+          ref: a91897b58356ed87d2190d200959ef33007e33f4
           fetch-depth: 2
           path: ufl-src
       - uses: actions/checkout@v7
@@ -84,8 +85,8 @@ jobs:
       - name: Verify the merged UFL and Firedrake source for the integration runs
         if: always() && steps.install.outcome == 'success'
         run: |
-          test "$(git -C ufl-src rev-parse HEAD)" = 44c076f5f7695d0dd4807d8d93050db14078e77a
-          test "$(git -C firedrake-repo rev-parse HEAD)" = c98d23b3265874eb8d96caeb33724bedbacf4b0e
+          test "$(git -C ufl-src rev-parse HEAD)" = a91897b58356ed87d2190d200959ef33007e33f4
+          test "$(git -C firedrake-repo rev-parse HEAD)" = ef742ec2d740894aedb0f57adf3fcd792b4d4849
           git -C ufl-src diff --exit-code HEAD
           git -C firedrake-repo diff --exit-code HEAD
       - name: Scalar integration and ownership
@@ -94,18 +95,28 @@ jobs:
           cd firedrake-repo
           result=0
           for ranks in 1 2; do
-            timeout -k 10s 140s mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_real_space.py -k 'nonspatial or mesh_independent_real_space' 2>&1 | tee "../results/scalar-n${ranks}.log" || result=$?
+            timeout -k 10s 140s mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -v --tb=short -m 'parallel[match]' tests/firedrake/regression/test_real_space.py -k 'nonspatial or mesh_independent_real_space' 2>&1 | tee "../results/scalar-n${ranks}.log" || result=$?
           done
           exit "$result"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scalar-integrals-${{ matrix.variant }}
+          path: results/scalar-*.log
       - name: Transfer and taped gradients across rank groups
         if: always() && steps.install.outcome == 'success'
         run: |
           cd firedrake-repo
           result=0
           for ranks in 2 3 4; do
-            timeout -k 10s 130s mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/{ensemble/test_ensemble,adjoint/test_assemble}.py -k nonspatial_transfer 2>&1 | tee "../results/transfer-n${ranks}.log" || result=$?
+            timeout -k 10s 130s mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -v --tb=short -m 'parallel[match]' tests/firedrake/{ensemble/test_ensemble,adjoint/test_assemble,external_operators/test_pytorch_operator}.py -k 'nonspatial_transfer or ml_parameters_group_training' 2>&1 | tee "../results/transfer-n${ranks}.log" || result=$?
           done
           exit "$result"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scalar-transfers-${{ matrix.variant }}
+          path: results/transfer-*.log
       - name: Source lint
         if: steps.install.outcome == 'success' && matrix.variant == 'real'
         run: |
@@ -130,7 +141,7 @@ jobs:
         run: |
           cd firedrake-repo
           for ranks in 1 2; do
-            mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/{test_assemble_baseform,test_real_space}.py -k 'vector_formsum_rejects or mesh_independent_real_space'
+            mpiexec --oversubscribe -n "$ranks" /tmp/parameters-venv/bin/python -m pytest -v --tb=short -m 'parallel[match]' tests/firedrake/regression/{test_assemble_baseform,test_real_space}.py -k 'vector_formsum_rejects or mesh_independent_real_space'
           done
       - name: Train on an interval and a square for ten optimizer steps
         if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
@@ -157,7 +168,7 @@ jobs:
         if: always() && steps.install.outcome == 'success' && matrix.variant == 'real'
         run: |
           cd ufl-src
-          timeout -k 10s 180s /tmp/parameters-venv/bin/python -m pytest -q --tb=short test --junitxml=../results/ufl.xml 2>&1 | tee ../results/ufl.log
+          timeout -k 10s 180s /tmp/parameters-venv/bin/python -m pytest -v --tb=short test --junitxml=../results/ufl.xml 2>&1 | tee ../results/ufl.log
       - name: Dependency consistency
         if: always() && steps.install.outcome == 'success'
         run: /tmp/parameters-venv/bin/python -m pip check 2>&1 | tee results/pip-check.txt
