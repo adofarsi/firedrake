@@ -1,8 +1,8 @@
-name: Check the nonspatial coefficient in a variational solve
+name: Evaluate the initial FEML paper objectives
 
 on:
   push:
-    branches: [codex/validate-feml-nonspatial-paper]
+    branches: [codex/validate-feml-forward-objectives]
 
 permissions:
   contents: read
@@ -10,22 +10,9 @@ permissions:
 jobs:
   paper:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: base-real
-            ref: a6b64e038d777035ca004d859e3d7b2a558f3bef
-            image: firedrakeproject/firedrake-vanilla-default@sha256:f1b31471d540f915bd53efb92224306967fa6ec93c6ce37c727c43e02d53aac0
-          - name: fixed-real
-            ref: 851cb934030bce654a7720ead69c72fd012af354
-            image: firedrakeproject/firedrake-vanilla-default@sha256:f1b31471d540f915bd53efb92224306967fa6ec93c6ce37c727c43e02d53aac0
-          - name: fixed-complex
-            ref: 851cb934030bce654a7720ead69c72fd012af354
-            image: firedrakeproject/firedrake-vanilla-complex@sha256:ff2a7711ce81d269e53d0d777f162211015b501205dabee79090c1d045547621
+    timeout-minutes: 100
     container:
-      image: ${{ matrix.image }}
+      image: firedrakeproject/firedrake-vanilla-default@sha256:f1b31471d540f915bd53efb92224306967fa6ec93c6ce37c727c43e02d53aac0
       options: --cpus 2 --memory 12g
     env:
       OMP_NUM_THREADS: 1
@@ -43,7 +30,7 @@ jobs:
           sparse-checkout: .github/validation
       - uses: actions/checkout@v7
         with:
-          ref: ${{ matrix.ref }}
+          ref: 851cb934030bce654a7720ead69c72fd012af354
           path: fd-src
       - uses: actions/checkout@v7
         with:
@@ -82,30 +69,16 @@ jobs:
           for module, repo in ((firedrake, 'fd-src'), (ufl, 'ufl-src')):
               assert Path(module.__file__).resolve().is_relative_to(Path(repo).resolve())
           PY
-      - name: Reproduce the scalar solver failure on the original branches
-        if: matrix.name == 'base-real'
+      - name: Evaluate the initial displacement, hardening and thermal objectives
         run: |
-          if /tmp/paper-env/bin/python validator/.github/validation/paper_controls.py scalar_solve > results/solver.log 2>&1; then exit 1; fi
-          /tmp/paper-env/bin/python - <<'PYRESULT'
-          import json
-          from pathlib import Path
-          report = json.loads(Path('results/controls.json').read_text())['scalar_solve']
-          assert report['error'] == "AttributeError: 'ScalarSpace' object has no attribute 'dm'", report
-          print(report)
-          PYRESULT
-      - name: Exercise the scalar coefficient through the solver on one and two ranks
-        if: matrix.name != 'base-real'
-        run: |
-          cd fd-src
-          for n in 1 2; do
-            mpiexec --oversubscribe -n "$n" /tmp/paper-env/bin/python -m pytest -q --tb=short -m 'parallel[match]' tests/firedrake/regression/test_real_space.py::test_nonspatial_coefficient_in_solver 2>&1 | tee "../results/solve-n$n.log"
+          status=0
+          for number in 01 04 05; do
+            /tmp/paper-env/bin/python validator/.github/validation/paper_forward.py "$number" > "results/forward-$number.log" 2>&1 || status=1
+            tail -14 "results/forward-$number.log"
           done
-      - name: Run the first displacement load level with the paper model
-        if: always() && matrix.name == 'fixed-real' && steps.install.outcome == 'success'
-        run: |
-          /tmp/paper-env/bin/python validator/.github/validation/paper_controls.py scalar_solve paper_forward 2>&1 | tee results/forward.log
+          exit "$status"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: solver-${{ matrix.name }}
+          name: paper-forward
           path: results
