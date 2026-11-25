@@ -1,8 +1,8 @@
-name: Evaluate the initial FEML paper objectives
+name: Compare the initial FEML objectives with the paper stack
 
 on:
   push:
-    branches: [codex/validate-feml-forward-objectives]
+    branches: [codex/compare-feml-paper-initial-objectives]
 
 permissions:
   contents: read
@@ -11,8 +11,28 @@ jobs:
   paper:
     runs-on: ubuntu-24.04
     timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: explicit
+            image: firedrakeproject/firedrake-vanilla-default@sha256:f1b31471d540f915bd53efb92224306967fa6ec93c6ce37c727c43e02d53aac0
+            fd: 851cb934030bce654a7720ead69c72fd012af354
+            ufl_repo: adofarsi/ufl
+            ufl: 7278d87c16d94a1fe4d063365065704d571e6917
+            fiat: a02d8ce77a2c88f14c754127422f01ddc6febfd9
+            pyadjoint: 957f265afd050092739ad9dca565bf9d23e3ba8c
+            torch: 2.15.0+cpu
+          - api: published
+            image: firedrakeproject/firedrake-vanilla-default@sha256:d124325d7a6b77c38693719c922973c78fc24825d956a0ef5bf05279e0d02079
+            fd: 476c5d23442cd9085c3a2bf78d2c997a8c59c9bc
+            ufl_repo: FEniCS/ufl
+            ufl: a113ed824d89eba6979f36ea4e99cb22e46a1cbf
+            fiat: 391391f0939d8f8fa1498704c35df022d846365a
+            pyadjoint: 99cb3f4cf2d4899234601c18e0b6d11f33910316
+            torch: 2.4.1+cpu
     container:
-      image: firedrakeproject/firedrake-vanilla-default@sha256:f1b31471d540f915bd53efb92224306967fa6ec93c6ce37c727c43e02d53aac0
+      image: ${{ matrix.image }}
       options: --cpus 2 --memory 12g
     env:
       OMP_NUM_THREADS: 1
@@ -30,23 +50,28 @@ jobs:
           sparse-checkout: .github/validation
       - uses: actions/checkout@v7
         with:
-          ref: 851cb934030bce654a7720ead69c72fd012af354
+          ref: ${{ matrix.fd }}
           path: fd-src
       - uses: actions/checkout@v7
         with:
-          repository: adofarsi/ufl
-          ref: 7278d87c16d94a1fe4d063365065704d571e6917
+          repository: ${{ matrix.ufl_repo }}
+          ref: ${{ matrix.ufl }}
           path: ufl-src
       - uses: actions/checkout@v7
         with:
           repository: firedrakeproject/fiat
-          ref: a02d8ce77a2c88f14c754127422f01ddc6febfd9
+          ref: ${{ matrix.fiat }}
           path: fiat-src
       - uses: actions/checkout@v7
         with:
           repository: adofarsi/feml-missing-physics-reproducibility
           ref: afa956a40e506abc1426bfa499135c86f1ce94cd
           path: paper
+      - uses: actions/checkout@v7
+        with:
+          repository: dolfin-adjoint/pyadjoint
+          ref: ${{ matrix.pyadjoint }}
+          path: pyadjoint-src
       - name: Install and verify the pinned runtime
         id: install
         run: |
@@ -54,31 +79,31 @@ jobs:
           python3 -m venv --system-site-packages /tmp/paper-env
           source /tmp/paper-env/bin/activate
           python -m pip install --no-deps --no-build-isolation -e ./ufl-src
-          python -m pip install --no-deps --no-build-isolation --config-settings editable_mode=compat -e ./fiat-src -e ./fd-src
-          python -m pip install torch==2.15.0+cpu --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install --no-deps --no-build-isolation --config-settings editable_mode=compat -e ./fiat-src -e ./fd-src -e ./pyadjoint-src
+          python -m pip install "torch==${{ matrix.torch }}" --index-url https://download.pytorch.org/whl/cpu
           python -m pip freeze > results/versions.txt
-          for repo in fd-src ufl-src fiat-src paper; do
+          for repo in fd-src ufl-src fiat-src pyadjoint-src paper; do
             git -C "$repo" rev-parse HEAD > "results/$repo.sha"
             git -C "$repo" diff --exit-code HEAD
           done
           python - <<'PY'
-          import firedrake, torch, ufl
+          import firedrake, torch, ufl, pyadjoint
           from pathlib import Path
           from petsc4py import PETSc
           print(torch.__version__, PETSc.Sys.getVersion())
-          for module, repo in ((firedrake, 'fd-src'), (ufl, 'ufl-src')):
+          for module, repo in ((firedrake, 'fd-src'), (ufl, 'ufl-src'), (pyadjoint, 'pyadjoint-src')):
               assert Path(module.__file__).resolve().is_relative_to(Path(repo).resolve())
           PY
       - name: Evaluate the initial displacement, hardening and thermal objectives
         run: |
           status=0
           for number in 01 04 05; do
-            /tmp/paper-env/bin/python validator/.github/validation/paper_forward.py "$number" > "results/forward-$number.log" 2>&1 || status=1
+            /tmp/paper-env/bin/python validator/.github/validation/paper_forward.py "$number" "${{ matrix.api }}" > "results/forward-$number.log" 2>&1 || status=1
             tail -14 "results/forward-$number.log"
           done
           exit "$status"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: paper-forward
+          name: paper-forward-${{ matrix.api }}
           path: results
