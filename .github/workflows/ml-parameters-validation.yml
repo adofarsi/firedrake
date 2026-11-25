@@ -35,13 +35,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ef742ec2d740894aedb0f57adf3fcd792b4d4849
+          ref: e0b95f4204449d62535e343081adee769090d3dc
           fetch-depth: 2
           path: firedrake-repo
       - uses: actions/checkout@v7
         with:
           repository: adofarsi/ufl
-          ref: a91897b58356ed87d2190d200959ef33007e33f4
+          ref: b28159ba2d2a9cfb74d5a39b73e8198a835e482c
           fetch-depth: 2
           path: ufl-src
       - uses: actions/checkout@v7
@@ -85,8 +85,8 @@ jobs:
       - name: Verify the merged UFL and Firedrake source for the integration runs
         if: always() && steps.install.outcome == 'success'
         run: |
-          test "$(git -C ufl-src rev-parse HEAD)" = a91897b58356ed87d2190d200959ef33007e33f4
-          test "$(git -C firedrake-repo rev-parse HEAD)" = ef742ec2d740894aedb0f57adf3fcd792b4d4849
+          test "$(git -C ufl-src rev-parse HEAD)" = b28159ba2d2a9cfb74d5a39b73e8198a835e482c
+          test "$(git -C firedrake-repo rev-parse HEAD)" = e0b95f4204449d62535e343081adee769090d3dc
           git -C ufl-src diff --exit-code HEAD
           git -C firedrake-repo diff --exit-code HEAD
       - name: Scalar integration and ownership
