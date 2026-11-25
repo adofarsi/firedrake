@@ -1,4 +1,4 @@
-"""Finite-dimensional Real spaces with no mesh."""
+"""Finite-dimensional scalar spaces that are independent of a mesh."""
 
 from __future__ import annotations
 
@@ -97,6 +97,10 @@ class ScalarSpaceBase:
         return self.value_shape
 
     @property
+    def block_shape(self) -> tuple[int, ...]:
+        return self.shape
+
+    @property
     def topological(self) -> ScalarSpaceBase:
         return self
 
@@ -117,7 +121,7 @@ class ScalarSpaceBase:
     @cached_property
     def template_vec(self) -> PETSc.Vec:
         """Return the PETSc layout of functions in this space."""
-        return self.axes.template_vec(self.shape)
+        return self.axes.template_vec(self.block_shape)
 
     def make_dat(self, val=None, valuetype=ScalarType, name: str | None = None) -> op3.Dat:
         if val is None:
