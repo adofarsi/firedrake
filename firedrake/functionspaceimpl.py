@@ -38,7 +38,7 @@ from firedrake import dmhooks, utils
 from firedrake.cython import dmcommon
 from firedrake.mesh import MeshTopology, ExtrudedMeshTopology, VertexOnlyMeshTopology, extract_mesh_topologies
 from firedrake.mesh import MeshGeometry, MeshSequenceTopology, MeshSequenceGeometry
-from firedrake.realspace import RealSpaceBase
+from firedrake.scalarspace import ScalarSpaceBase
 from firedrake.petsc import PETSc
 from firedrake.utils import IntType
 
@@ -2729,7 +2729,7 @@ def is_mixed(obj) -> bool:
 
 
 @is_mixed.register
-def _(V: RealSpaceBase) -> bool:
+def _(V: ScalarSpaceBase) -> bool:
     return False
 
 

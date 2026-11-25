@@ -46,42 +46,73 @@ class _RealElement(ufl.AbstractFiniteElement):
 
 @dataclass(eq=False)
 class _Layout:
-    comm: MPI.Comm
+    domain: NonSpatialDomain
     shape: tuple[int, ...]
 
     @cached_property
     def axes(self) -> op3.AxisTree:
-        return real_axes(self.comm, self.shape)
+        return real_axes(self.domain.comm, self.shape)
 
 
-class RealSpaceBase:
+class NonSpatialDomain(ufl.NonSpatialDomain):
+    """Declare coefficient spaces that share a communicator and have no geometry.
+
+    Parameters
+    ----------
+    comm : mpi4py.MPI.Comm
+        Ranks that share the algebraic values.
+
+    Notes
+    -----
+    Reusing the same domain and value shape gives compatible spaces.
+    """
+
+    def __init__(self, comm: MPI.Comm) -> None:
+        super().__init__()
+        self.comm = comm
+        self._layouts: dict[tuple[int, ...], _Layout] = {}
+
+    def _layout(self, shape: tuple[int, ...]) -> _Layout:
+        if shape not in self._layouts:
+            self._layouts[shape] = _Layout(self, shape)
+        return self._layouts[shape]
+
+
+class ScalarSpaceBase:
     parent = None
 
-    def __init__(self, layout: _Layout) -> None:
+    def __init__(self, layout: _Layout, name: str | None = None) -> None:
         self._layout = layout
-        super().__init__(None, _RealElement(layout.shape))
+        self.name = name
+        super().__init__(layout.domain, _RealElement(layout.shape))
 
-    def _ufl_hash_data_(self) -> tuple:
-        # A space and its dual share this layout. UFL's compiler signature
-        # uses only the element shape and is independent of Python identities.
-        return super()._ufl_hash_data_(), self._layout
+    def __len__(self) -> int:
+        return 1
+
+    def __iter__(self):
+        yield self
+
+    def __getitem__(self, i: int) -> ScalarSpaceBase:
+        if i != 0:
+            raise IndexError(i)
+        return self
 
     @property
     def comm(self) -> MPI.Comm:
-        return self._layout.comm
+        return self._layout.domain.comm
 
     @property
     def shape(self) -> tuple[int, ...]:
         return self._layout.shape
 
     @property
-    def topological(self) -> RealSpaceBase:
+    def topological(self) -> ScalarSpaceBase:
         return self
 
     def mesh(self) -> None:
         return None
 
-    def ufl_function_space(self) -> RealSpaceBase:
+    def ufl_function_space(self) -> ScalarSpaceBase:
         return self
 
     def dim(self) -> int:
@@ -98,50 +129,51 @@ class RealSpaceBase:
         return op3.Dat(axes, data=data.ravel(), name=name)
 
 
-class RealSpace(RealSpaceBase, ufl.FunctionSpace):
+class ScalarSpace(ScalarSpaceBase, ufl.FunctionSpace):
     """Declare a finite-dimensional space whose values are shared on a communicator.
 
     Parameters
     ----------
-    comm : mpi4py.MPI.Comm
-        Ranks that share a single value.
+    domain : NonSpatialDomain
+        Domain on whose communicator each component has one global value.
     shape : tuple of int, optional
         Shape of the value. The empty tuple gives a scalar.
 
     Notes
     -----
-    Each declaration defines a distinct space. Reuse the space for compatible
-    directions and its dual for linear functionals. A mesh-independent space
+    Spaces with the same domain and shape are compatible. Their dual
+    contains the corresponding linear functionals. A mesh-independent space
     has no spatial gradient or integration measure of its own.
 
     Examples
     --------
-    >>> P = RealSpace(COMM_WORLD, (2,))
+    >>> P = ScalarSpace(NonSpatialDomain(COMM_WORLD), (2,))
     >>> h = Function(P, val=[1, 2])
     >>> g = Cofunction(P.dual(), val=[3, 4])
     >>> assemble(action(g, h)).real
     11.0
     """
 
-    def __init__(self, comm: MPI.Comm, shape: tuple[int, ...] = ()) -> None:
+    def __init__(self, domain: NonSpatialDomain, shape: tuple[int, ...] = (),
+                 name: str | None = None) -> None:
         shape = tuple(index(n) for n in shape)
         if any(n < 1 for n in shape):
             raise ValueError("Real space extents must be positive.")
-        super().__init__(_Layout(comm, shape))
+        super().__init__(domain._layout(shape), name)
 
     @cached_property
-    def _dual_space(self) -> _DualRealSpace:
-        return _DualRealSpace(self)
+    def _dual_space(self) -> _DualScalarSpace:
+        return _DualScalarSpace(self)
 
-    def dual(self) -> _DualRealSpace:
+    def dual(self) -> _DualScalarSpace:
         """Return the space of linear functionals on this space."""
         return self._dual_space
 
 
-class _DualRealSpace(RealSpaceBase, ufl.functionspace.DualSpace):
-    def __init__(self, primal: RealSpace) -> None:
+class _DualScalarSpace(ScalarSpaceBase, ufl.functionspace.DualSpace):
+    def __init__(self, primal: ScalarSpace) -> None:
         self._primal_space = primal
-        super().__init__(primal._layout)
+        super().__init__(primal._layout, primal.name)
 
-    def dual(self) -> RealSpace:
+    def dual(self) -> ScalarSpace:
         return self._primal_space

@@ -28,7 +28,7 @@ from firedrake.utils import ScalarType, IntType, as_ctypes, _new_uid, complex_mo
 from firedrake import functionspaceimpl, utils
 from firedrake.cofunction import Cofunction, RieszMap
 from firedrake.adjoint_utils import FunctionMixin
-from firedrake.realspace import RealSpace
+from firedrake.scalarspace import ScalarSpace
 from firedrake.petsc import PETSc
 from firedrake.functionspaceimpl import parse_component_indices, is_mixed
 from firedrake.mesh import MeshGeometry, VertexOnlyMesh, VertexOnlyMeshTopology, extract_mesh_topologies
@@ -79,7 +79,7 @@ class CoordinatelessFunction(ufl.Coefficient):
 
         """
         assert isinstance(function_space, (functionspaceimpl.FunctionSpace,
-                                           functionspaceimpl.MixedFunctionSpace, RealSpace)), \
+                                           functionspaceimpl.MixedFunctionSpace, ScalarSpace)), \
             "Can't make a CoordinatelessFunction defined on a " + str(type(function_space))
         if isinstance(val, np.ndarray):
             assert val.flags.writeable, "CoordinatelessFunction val expects a modifiable array"
@@ -318,7 +318,7 @@ class Function(ufl.Coefficient, FunctionMixin):
         V = function_space
         if isinstance(V, Function):
             V = V.function_space()
-        elif not isinstance(V, (functionspaceimpl.WithGeometry, RealSpace)):
+        elif not isinstance(V, (functionspaceimpl.WithGeometry, ScalarSpace)):
             raise NotImplementedError("Can't make a Function defined on a "
                                       + str(type(function_space)))
 

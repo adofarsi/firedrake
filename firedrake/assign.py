@@ -42,7 +42,7 @@ class AssignExprBuilder(DAGTraverser):
 
     @process.register
     def _(self, func: Function | Cofunction, /) -> op3.Dat:
-        if isinstance(self.function_space, firedrake.realspace.RealSpaceBase):
+        if isinstance(self.function_space, firedrake.scalarspace.ScalarSpaceBase):
             if func.function_space() != self.function_space:
                 raise ValueError("Assignment requires the same mesh-independent function space.")
             return func.dat, True

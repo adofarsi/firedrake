@@ -9,7 +9,7 @@ from tsfc.ufl_utils import TSFCConstantMixin
 import pyop3 as op3
 from pyop3.mpi import collective
 from firedrake.petsc import PETSc
-from firedrake.realspace import real_axes
+from firedrake.scalarspace import real_axes
 from firedrake.utils import ScalarType
 from ufl.classes import all_ufl_classes, ufl_classes, terminal_classes
 from ufl.core.ufl_type import UFLType

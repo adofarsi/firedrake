@@ -11,7 +11,8 @@ import ufl
 
 from firedrake.cofunction import Cofunction
 from firedrake.function import Function
-from firedrake.realspace import RealSpace
+from firedrake.functionspace import VectorFunctionSpace
+from firedrake.scalarspace import NonSpatialDomain, ScalarSpace
 from firedrake.utils import ScalarType, complex_mode
 
 if TYPE_CHECKING:
@@ -53,7 +54,8 @@ class MLParameters(ufl.Coefficient):
         size = sum(self._sizes)
         if not size:
             raise ValueError("A parameter vector must contain at least one scalar.")
-        super().__init__(RealSpace(MPI.COMM_SELF, (size,)))
+        domain = NonSpatialDomain(MPI.COMM_SELF)
+        super().__init__(VectorFunctionSpace(domain, "Real", 0, dim=size))
 
     @property
     def tensors(self) -> tuple[torch.Tensor, ...]:
@@ -62,7 +64,7 @@ class MLParameters(ufl.Coefficient):
             raise ValueError("The model parameter layout has changed. Create a new MLParameters handle.")
         return self._tensors
 
-    def function_space(self) -> RealSpace:
+    def function_space(self) -> ScalarSpace:
         """Return the space of parameter directions."""
         return self.ufl_function_space()
 

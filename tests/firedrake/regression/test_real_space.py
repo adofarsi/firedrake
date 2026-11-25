@@ -549,8 +549,8 @@ def test_mesh_independent_real_space(shape):
     from firedrake.ufl_expr import extract_domains
     from firedrake.utils import ScalarType
 
-    P = RealSpace(COMM_WORLD, shape)
-    Q = RealSpace(COMM_WORLD, shape)
+    P = ScalarSpace(NonSpatialDomain(COMM_WORLD), shape)
+    Q = ScalarSpace(NonSpatialDomain(COMM_WORLD), shape)
     assert P != Q and P.dual() != Q.dual()
     assert P.dual().dual() is P
     assert P._ufl_signature_data_({}) == Q._ufl_signature_data_({})
@@ -582,3 +582,30 @@ def test_mesh_independent_real_space(shape):
     assert type(result) is Cofunction and result.function_space() == P.dual()
     assert assemble(2 * g - result, tensor=g) is g
     assert np.allclose(g.dat.data_ro_with_halos.ravel(), -3 * y)
+
+
+@pytest.mark.parallel(nprocs=[1, 2])
+@pytest.mark.parametrize("shape", [(), (2,), (2, 2)])
+def test_nonspatial_integral_and_derivative(shape):
+    domain = NonSpatialDomain(COMM_WORLD)
+    P = ScalarSpace(domain, shape)
+    values = np.arange(1, P.dim() + 1, dtype=float)
+    p = Function(P, val=values)
+    direction = Function(P, val=2 * values)
+    assert P == ScalarSpace(domain, shape)
+    assert P != ScalarSpace(NonSpatialDomain(COMM_WORLD), shape)
+
+    for mesh in (UnitIntervalMesh(4), UnitSquareMesh(2, 2)):
+        x = SpatialCoordinate(mesh)[0]
+        # The integral of x is one half on either unit mesh.
+        J = inner(p, p) * x * dx
+        for scale in (1, 3):
+            p.assign(scale * direction)
+            assert assemble(J) == pytest.approx(2 * scale**2 * np.dot(values, values))
+            # Differentiate a linear functional to get its complex-linear dual.
+            L = inner(direction, p) * x * dx
+            dL = derivative(L, p)
+            g = assemble(dL)
+            assert g.function_space() == P.dual()
+            assert np.allclose(g.dat.data_ro_with_halos.ravel(), values)
+            assert assemble(action(g, direction)) == pytest.approx(2 * np.dot(values, values))

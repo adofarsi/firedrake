@@ -16,7 +16,7 @@ from firedrake.adjoint_utils.function import CofunctionMixin
 from firedrake.adjoint_utils.checkpointing import DelegatedFunctionCheckpoint
 from firedrake.adjoint_utils.blocks.function import CofunctionAssignBlock
 from firedrake.mesh import extract_mesh_topologies
-from firedrake.realspace import _DualRealSpace
+from firedrake.scalarspace import _DualScalarSpace
 from firedrake.petsc import PETSc
 
 
@@ -81,7 +81,7 @@ class Cofunction(ufl.Cofunction, CofunctionMixin):
             # Deep copy prevents modifications to Vector copies.
             # Also, this discard the value of `val` if it was specified (consistent with Function)
             val = function_space.copy(deepcopy=True).dat
-        elif not isinstance(V, (functionspaceimpl.FiredrakeDualSpace, _DualRealSpace)):
+        elif not isinstance(V, (functionspaceimpl.FiredrakeDualSpace, _DualScalarSpace)):
             raise NotImplementedError("Can't make a Cofunction defined on a "
                                       + str(type(function_space)))
 

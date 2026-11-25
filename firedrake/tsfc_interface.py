@@ -161,6 +161,35 @@ class TSFCKernel:
 SplitKernel = collections.namedtuple("SplitKernel", ["indices", "kinfo"])
 
 
+def _localize_nonspatial_form(form):
+    """Use the constant basis on each integration cell when compiling scalar spaces."""
+    if not isinstance(form, Form):
+        yield form, {}
+        return
+    terminals = [t for t in (*form.arguments(), *form.coefficients())
+                 if isinstance(t.ufl_domain(), ufl.NonSpatialDomain)]
+    if not terminals:
+        yield form, {}
+        return
+
+    by_domain = collections.defaultdict(list)
+    for integral in form.integrals():
+        by_domain[integral.ufl_domain()].append(integral)
+    for mesh, integrals in by_domain.items():
+        on_mesh = Form(integrals)
+        replacements = {}
+        for t in terminals:
+            element = finat.ufl.FiniteElement("Real", mesh.ufl_cell(), 0)
+            if t.ufl_shape:
+                element = finat.ufl.TensorElement(element, shape=t.ufl_shape)
+            space = ufl.FunctionSpace(mesh, element)
+            if isinstance(t, ufl.Argument):
+                replacements[t] = ufl.Argument(space, t.number(), t.part())
+            else:
+                replacements[t] = ufl.Coefficient(space, count=t.count())
+        yield ufl.replace(on_mesh, replacements), {v: k for k, v in replacements.items()}
+
+
 def _compile_form_hashkey(form, name, parameters=None, split=True, dont_split=(), diagonal=False, access=op3.INC):
     return (
         form.signature(),
@@ -243,7 +272,9 @@ def compile_form(form, name, parameters=None, split=True, dont_split=(), diagona
             assert nargs == 2
             nargs = 1
         iterable = ([(None, )*nargs, form], )
-    for idx, f in iterable:
+    localized = ((idx, f, original) for idx, block in iterable
+                 for f, original in _localize_nonspatial_form(block))
+    for idx, f, original in localized:
         if isinstance(f, ZeroBaseForm) or f.empty():
             # If we're assembling the R space component of a mixed argument,
             # and that component doesn't actually appear in the form then we
@@ -254,7 +285,7 @@ def compile_form(form, name, parameters=None, split=True, dont_split=(), diagona
         meshes = extract_domains(f)
         domain_number_map = tuple(all_meshes.index(m) for m in meshes)
         coefficient_numbers = tuple(
-            numbering[c] for c in f.coefficients()
+            numbering[original.get(c, c)] for c in f.coefficients()
         )
         constant_numbers = tuple(
             numbering[c] for c in extract_firedrake_constants(f)

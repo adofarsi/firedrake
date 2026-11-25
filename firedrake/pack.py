@@ -14,6 +14,9 @@ from immutabledict import immutabledict as idict
 import firedrake.constant
 import firedrake.mesh
 from firedrake import utils
+from mpi4py import MPI
+
+from firedrake.scalarspace import ScalarSpaceBase
 from firedrake.cofunction import Cofunction
 from firedrake.function import CoordinatelessFunction, Function
 from firedrake.functionspaceimpl import RestrictedFunctionSpace, WithGeometry, is_mixed, entity_dofs_key, entity_permutations_key
@@ -147,6 +150,10 @@ def _(
     space: WithGeometry,
     **kwargs,
 ):
+    if isinstance(space, ScalarSpaceBase):
+        if MPI.Comm.Compare(space.comm, loop_index.mesh.comm) not in {MPI.IDENT, MPI.CONGRUENT}:
+            raise ValueError("Transfer the nonspatial value to the integration communicator first.")
+        return dat
     # This is tricky. Consider the case where you have a mixed space with hexes and
     # each space needs a different (non-permutation) transform. That means that we
     # have to generate code like:

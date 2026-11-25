@@ -12,12 +12,23 @@ from pyop3.pyop2_utils import flatten
 
 from firedrake import functionspaceimpl as impl
 from firedrake.petsc import PETSc
+from firedrake.scalarspace import NonSpatialDomain, ScalarSpace
 
 import numbers
 
 
 __all__ = ("MixedFunctionSpace", "FunctionSpace",
            "VectorFunctionSpace", "TensorFunctionSpace", "RestrictedFunctionSpace")
+
+
+def _nonspatial_space(domain, family, degree, shape, name, *element_options):
+    if family not in ("Real", "R") or degree not in (None, 0):
+        raise ValueError("A nonspatial domain supports the degree-zero Real family.")
+    if any(option is not None for option in element_options):
+        raise ValueError("This element option requires a spatial mesh.")
+    if shape is None or any(n is None for n in shape):
+        raise ValueError("Specify the value dimension or shape on a nonspatial domain.")
+    return ScalarSpace(domain, shape, name)
 
 
 @PETSc.Log.EventDecorator()
@@ -114,6 +125,8 @@ def FunctionSpace(mesh, family, degree=None, name=None,
     are ignored and the appropriate :class:`.FunctionSpace` is returned.
 
     """
+    if isinstance(mesh, NonSpatialDomain):
+        return _nonspatial_space(mesh, family, degree, (), name, vfamily, vdegree, variant, quad_scheme, _labels)
     element = make_scalar_element(mesh, family, degree, vfamily, vdegree, variant, quad_scheme)
     return impl.WithGeometry.make_function_space(mesh, element, name=name, _labels=_labels)
 
@@ -154,6 +167,8 @@ def DualSpace(mesh, family, degree=None, name=None,
     other arguments are ignored and the appropriate :class:`.FunctionSpace` is
     returned.
     """
+    if isinstance(mesh, NonSpatialDomain):
+        return _nonspatial_space(mesh, family, degree, (), name, vfamily, vdegree, variant, quad_scheme).dual()
     element = make_scalar_element(mesh, family, degree, vfamily, vdegree, variant, quad_scheme)
     return impl.FiredrakeDualSpace.make_function_space(mesh, element, name=name)
 
@@ -201,6 +216,8 @@ def VectorFunctionSpace(mesh, family, degree=None, dim=None, name=None,
     pass it to :class:`.FunctionSpace` directly instead.
 
     """
+    if isinstance(mesh, NonSpatialDomain):
+        return _nonspatial_space(mesh, family, degree, (dim,), name, vfamily, vdegree, variant, quad_scheme)
     sub_element = make_scalar_element(mesh, family, degree, vfamily, vdegree, variant, quad_scheme)
     if dim is None:
         dim = mesh.geometric_dimension
@@ -258,6 +275,8 @@ def TensorFunctionSpace(mesh, family, degree=None, shape=None,
     `FunctionSpace` directly instead.
 
     """
+    if isinstance(mesh, NonSpatialDomain):
+        return _nonspatial_space(mesh, family, degree, shape, name, vfamily, vdegree, variant, quad_scheme, symmetry)
     sub_element = make_scalar_element(mesh, family, degree, vfamily, vdegree, variant, quad_scheme)
     if shape is None:
         shape = (mesh.geometric_dimension,) * 2
