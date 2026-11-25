@@ -1,0 +1,106 @@
+name: Run the FEML paper on nonspatial scalar spaces
+
+on:
+  push:
+    branches: [codex/validate-feml-nonspatial-paper]
+
+permissions:
+  contents: read
+
+jobs:
+  paper:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    container:
+      image: firedrakeproject/firedrake-vanilla-default@sha256:f1b31471d540f915bd53efb92224306967fa6ec93c6ce37c727c43e02d53aac0
+      options: --cpus 2 --memory 12g
+    env:
+      OMP_NUM_THREADS: 1
+      OPENBLAS_NUM_THREADS: 1
+      PYTHONUNBUFFERED: 1
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: validator
+          sparse-checkout: .github/validation
+      - uses: actions/checkout@v7
+        with:
+          ref: a6b64e038d777035ca004d859e3d7b2a558f3bef
+          path: fd-src
+      - uses: actions/checkout@v7
+        with:
+          repository: adofarsi/ufl
+          ref: 7278d87c16d94a1fe4d063365065704d571e6917
+          path: ufl-src
+      - uses: actions/checkout@v7
+        with:
+          repository: firedrakeproject/fiat
+          ref: a02d8ce77a2c88f14c754127422f01ddc6febfd9
+          path: fiat-src
+      - uses: actions/checkout@v7
+        with:
+          repository: adofarsi/feml-missing-physics-reproducibility
+          ref: afa956a40e506abc1426bfa499135c86f1ce94cd
+          path: paper
+      - name: Install and verify the pinned runtime
+        id: install
+        run: |
+          mkdir results
+          python3 -m venv --system-site-packages /tmp/paper-env
+          source /tmp/paper-env/bin/activate
+          python -m pip install --no-deps --no-build-isolation -e ./ufl-src
+          python -m pip install --no-deps --no-build-isolation --config-settings editable_mode=compat -e ./fiat-src -e ./fd-src
+          python -m pip install torch==2.15.0+cpu --index-url https://download.pytorch.org/whl/cpu
+          python -m pip freeze > results/versions.txt
+          for repo in fd-src ufl-src fiat-src paper; do
+            git -C "$repo" rev-parse HEAD > "results/$repo.sha"
+            git -C "$repo" diff --exit-code HEAD
+          done
+          python - <<'PY'
+          import firedrake, torch, ufl
+          from pathlib import Path
+          from petsc4py import PETSc
+          print(torch.__version__, PETSc.Sys.getVersion())
+          for module, repo in ((firedrake, 'fd-src'), (ufl, 'ufl-src')):
+              assert Path(module.__file__).resolve().is_relative_to(Path(repo).resolve())
+          PY
+      - name: Run the published paper scripts and capture their exit codes
+        if: steps.install.outcome == 'success'
+        run: |
+          source /tmp/paper-env/bin/activate
+          invalid=0
+          for number in 01 02 03 04 05 06; do
+            if [[ "$number" == 03 && ( ! -f paper/outputs/displacement_controlled/model.pth || ! -f paper/outputs/load_controlled/model.pth ) ]]; then
+              echo 'Missing fresh weights from 01 or 02' > results/03.blocked
+              invalid=1
+              continue
+            fi
+            if [[ "$number" == 06 ]]; then
+              if [[ ! -f paper/outputs/thermal/model.pth ]]; then
+                echo 'Missing fresh weights from 05' > results/06.blocked
+                invalid=1
+                continue
+              fi
+              python -m pip install 'pysr==1.5.10'
+            fi
+            status=0
+            python paper/scripts/"$number"_*.py > "results/$number.log" 2>&1 || status=$?
+            echo "$status" > "results/$number.exit"
+            tail -20 "results/$number.log"
+            if [[ "$status" != 0 ]]; then invalid=1; fi
+          done
+          exit "$invalid"
+      - name: Test the explicit parameter and the first paper load level
+        if: always() && steps.install.outcome == 'success'
+        run: |
+          /tmp/paper-env/bin/python validator/.github/validation/paper_controls.py 2>&1 | tee results/controls.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: paper-results
+          path: |
+            results
+            paper/outputs
