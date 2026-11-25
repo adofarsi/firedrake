@@ -35,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 89664fd1e4fbf4ef4cce9affa9c3fda25feac9e4
+          ref: cee0f16b77cf4dfa9cb9fac676cc878dc56bac58
           fetch-depth: 2
           path: firedrake-repo
       - uses: actions/checkout@v7
@@ -86,7 +86,7 @@ jobs:
         if: always() && steps.install.outcome == 'success'
         run: |
           test "$(git -C ufl-src rev-parse HEAD)" = 7278d87c16d94a1fe4d063365065704d571e6917
-          test "$(git -C firedrake-repo rev-parse HEAD)" = 89664fd1e4fbf4ef4cce9affa9c3fda25feac9e4
+          test "$(git -C firedrake-repo rev-parse HEAD)" = cee0f16b77cf4dfa9cb9fac676cc878dc56bac58
           git -C ufl-src diff --exit-code HEAD
           git -C firedrake-repo diff --exit-code HEAD
       - name: Scalar integration and ownership
