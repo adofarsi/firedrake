@@ -12,6 +12,7 @@ import numpy as np
 import pyop3 as op3
 import ufl
 
+from firedrake.petsc import PETSc
 from firedrake.utils import ScalarType
 
 
@@ -109,14 +110,22 @@ class ScalarSpaceBase:
         """Return the global number of degrees of freedom."""
         return self.value_size
 
+    @property
+    def axes(self) -> op3.AxisTree:
+        return self.ufl_domain()._axes(self.shape)
+
+    @cached_property
+    def template_vec(self) -> PETSc.Vec:
+        """Return the PETSc layout of functions in this space."""
+        return self.axes.template_vec(self.shape)
+
     def make_dat(self, val=None, valuetype=ScalarType, name: str | None = None) -> op3.Dat:
-        axes = self.ufl_domain()._axes(self.shape)
         if val is None:
-            return op3.Dat.zeros(axes, dtype=valuetype, name=name)
+            return op3.Dat.zeros(self.axes, dtype=valuetype, name=name)
         data = np.asarray(val, dtype=valuetype)
         if data.size != self.dim():
             raise ValueError(f"Expected {self.dim()} values, got {data.size}.")
-        return op3.Dat(axes, data=data.ravel(), name=name)
+        return op3.Dat(self.axes, data=data.ravel(), name=name)
 
 
 class ScalarSpace(ScalarSpaceBase, ufl.FunctionSpace):
