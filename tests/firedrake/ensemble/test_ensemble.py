@@ -416,3 +416,39 @@ def test_ensemble_sequential(ensemble, direction):
     parallel_assert(
         abs(float(recv_f)-expected) < 1e-12,
         msg=f"Failed to send Function properly. Expecting {expected} but received {float(recv_f)}")
+
+
+@pytest.mark.parallel(nprocs=[2, 3, 4])
+@pytest.mark.parametrize("shape", [(), (2,), (2, 2)])
+def test_nonspatial_transfer(shape):
+    import numpy as np
+    from firedrake.utils import complex_mode
+
+    parent = COMM_WORLD
+    member = int(parent.rank >= (parent.size + 1) // 2)
+    group = parent.Split(member, -parent.rank)
+    try:
+        P = ScalarSpace(NonSpatialDomain(parent), shape)
+        Q = ScalarSpace(NonSpatialDomain(group), shape)
+        transfer = ScalarSpaceTransfer(P, Q)
+        x = np.arange(1, P.dim() + 1) * (1j if complex_mode else 1.0)
+        h = Function(P)
+        owned = h.dat.data_wo.ravel()
+        owned[:] = x[:owned.size]
+        local = transfer.replicate(h)
+        assert np.allclose(local.dat.data_ro_with_halos.ravel(), x)
+
+        mesh = UnitIntervalMesh(4, comm=group) if member == 0 else UnitSquareMesh(2, 2, comm=group)
+        weights = (member + 1) * np.arange(1, P.dim() + 1, dtype=float)
+        field = Function(Q, val=weights)
+        J = inner(field, local) * dx(domain=mesh)
+        group_loss = assemble(J)
+        group_gradient = assemble(derivative(J, local))
+        gradient = transfer.adjoint(group_gradient)
+        expected = 3 * np.arange(1, P.dim() + 1, dtype=float)
+        assert np.allclose(gradient.dat.data_ro_with_halos.ravel(), expected)
+        pairing = assemble(action(gradient, h))
+        assert pairing == pytest.approx(np.vdot(x, expected))
+        assert pairing == pytest.approx(parent.allreduce(group_loss if group.rank == 0 else 0))
+    finally:
+        group.Free()

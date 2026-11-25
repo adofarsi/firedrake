@@ -5,6 +5,7 @@ import contextlib
 import functools
 from typing import TYPE_CHECKING, Any
 
+from mpi4py import MPI
 import numpy as np
 import pyop3 as op3
 import pyop3.types
@@ -14,8 +15,6 @@ from immutabledict import immutabledict as idict
 import firedrake.constant
 import firedrake.mesh
 from firedrake import utils
-from mpi4py import MPI
-
 from firedrake.scalarspace import ScalarSpaceBase
 from firedrake.cofunction import Cofunction
 from firedrake.function import CoordinatelessFunction, Function

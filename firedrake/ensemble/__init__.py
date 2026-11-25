@@ -7,3 +7,4 @@ from firedrake.ensemble.ensemble_functionspace import (  # noqa F401
 )
 from firedrake.ensemble.ensemble_mat import EnsembleBlockDiagonalMat  # noqa: F401
 from firedrake.ensemble.ensemble_pc import EnsembleBJacobiPC  # noqa: F401
+from firedrake.ensemble.scalar_transfer import ScalarSpaceTransfer  # noqa: F401

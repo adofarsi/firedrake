@@ -26,6 +26,7 @@ from pyop3.mpi import COMM_WORLD
 from firedrake.formmanipulation import split_form
 from firedrake.parameters import parameters as default_parameters
 from firedrake.petsc import PETSc
+from firedrake.scalarspace import ScalarSpaceBase
 from firedrake import utils
 
 # Set TSFC default scalar type at load time
@@ -167,7 +168,7 @@ def _localize_nonspatial_form(form):
         yield form, {}
         return
     terminals = [t for t in (*form.arguments(), *form.coefficients())
-                 if isinstance(t.ufl_domain(), ufl.NonSpatialDomain)]
+                 if isinstance(t.ufl_function_space(), ScalarSpaceBase)]
     if not terminals:
         yield form, {}
         return

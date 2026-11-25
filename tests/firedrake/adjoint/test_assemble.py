@@ -133,3 +133,29 @@ def convergence_rates(E_values, eps_values):
         r.append(log(E_values[i] / E_values[i - 1]) / log(eps_values[i] / eps_values[i - 1]))
 
     return r
+
+
+@pytest.mark.skipcomplex
+@pytest.mark.parallel(nprocs=[2, 3])
+def test_nonspatial_transfer_tape():
+    # The two mesh objectives are evaluated on disjoint MPI groups.
+    parent = COMM_WORLD
+    member = int(parent.rank >= (parent.size + 1) // 2)
+    group = parent.Split(member, -parent.rank)
+    try:
+        P = FunctionSpace(NonSpatialDomain(parent), "Real", 0)
+        Q = FunctionSpace(NonSpatialDomain(group), "Real", 0)
+        transfer = ScalarSpaceTransfer(P, Q)
+        p = Function(P, val=2.0)
+        local = transfer.replicate(p)
+        mesh = UnitIntervalMesh(4, comm=group) if member == 0 else UnitSquareMesh(2, 2, comm=group)
+        # Testing with one scalar argument stores the local loss in Q*.
+        group_loss = assemble((member + 1) * local**2 * TestFunction(Q) * dx(domain=mesh))
+        total = assemble(action(transfer.adjoint(group_loss), Function(P, val=1.0)))
+        rf = ReducedFunctional(total, Control(p))
+        assert total == pytest.approx(12)
+        assert rf.derivative().dat.data_ro_with_halos.item() == pytest.approx(12)
+        assert rf(Function(P, val=3.0)) == pytest.approx(27)
+        assert rf.derivative().dat.data_ro_with_halos.item() == pytest.approx(18)
+    finally:
+        group.Free()

@@ -156,7 +156,7 @@ from firedrake.eigensolver import (  # noqa: F401
 from firedrake.ensemble import (  # noqa: F401
     Ensemble, EnsembleFunction, EnsembleCofunction,
     EnsembleFunctionSpace, EnsembleDualSpace, EnsembleBJacobiPC,
-    EnsembleBlockDiagonalMat
+    EnsembleBlockDiagonalMat, ScalarSpaceTransfer
 )
 from firedrake.randomfunctiongen import *  # noqa: F401
 from firedrake.external_operators import (  # noqa: F401
